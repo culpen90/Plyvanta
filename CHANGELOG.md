@@ -32,7 +32,7 @@ installation.
 
 APK SHA-256:
 
-`261b13b5439ebad9cbf90d27c294bf9873994b943e1f58fe458b78749a3c3059`
+`a89df67a2730fa3e77ebeede3e1c55753ef5cd73ac6b9f9721d377f7e053fc66`
 
 Debug certificate SHA-256:
 

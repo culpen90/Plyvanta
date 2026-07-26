@@ -15,7 +15,6 @@ complete license text is included in `LICENSE`.
 Plyvanta uses NewPipe Extractor:
 
 - Project: https://github.com/TeamNewPipe/NewPipeExtractor
-- Copyright: the NewPipe Extractor contributors
 - License: GNU General Public License, version 3 or later
 
 NewPipe Extractor resolves public YouTube metadata and direct media streams.
@@ -53,9 +52,12 @@ Plyvanta uses OkHttp and Okio:
 
 - Project: https://github.com/square/okhttp
 - Project: https://github.com/square/okio
-- Copyright: Square, Inc. and contributors
+- OkHttp copyright: 2019 Square, Inc.
+- Okio copyright: 2013 Square, Inc.
 - License: Apache License 2.0
 - License text: `licenses/Apache-2.0.txt`
+- OkHttp Public Suffix List notice:
+  `licenses/OkHttp-PublicSuffixDatabase-NOTICE.txt`
 
 ## Complete runtime notices
 

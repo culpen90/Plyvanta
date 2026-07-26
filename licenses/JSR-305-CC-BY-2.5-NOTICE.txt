@@ -1,0 +1,10 @@
+The JSR-305 annotations GuardedBy, Immutable, NotThreadSafe, and ThreadSafe
+contain the following source notice:
+
+Copyright (c) 2005 Brian Goetz
+Released under the Creative Commons Attribution License
+http://creativecommons.org/licenses/by/2.5
+Official home: http://www.jcip.net
+
+Creative Commons Attribution 2.5 legal code:
+https://creativecommons.org/licenses/by/2.5/legalcode

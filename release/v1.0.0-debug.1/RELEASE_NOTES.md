@@ -28,13 +28,17 @@ uninstalling this preview first.
 - Application ID: `app.plyvanta.debug`
 - Minimum Android version: Android 8.0 / API 26
 - APK SHA-256:
-  `261b13b5439ebad9cbf90d27c294bf9873994b943e1f58fe458b78749a3c3059`
+  `a89df67a2730fa3e77ebeede3e1c55753ef5cd73ac6b9f9721d377f7e053fc66`
 - Debug certificate SHA-256:
   `f316b684e87b4df6deb4c9fc987e530e7c3fae9810e6a3371b0cc0ea05f179f1`
 - APK Signature Scheme v2 verification passed.
 - 29 unit tests, Android lint, debug assembly, release shrinking, and release
   assembly passed.
 - Project and third-party legal materials are embedded under `assets/legal/`.
+
+The complete Plyvanta source for this build is attached automatically to this
+tag by GitHub. Exact upstream source locations for GPL- and MPL-licensed
+runtime components are listed in the embedded `THIRD_PARTY_NOTICES.md`.
 
 ## Limits
 
