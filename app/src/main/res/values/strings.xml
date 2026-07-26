@@ -17,4 +17,27 @@
     <string name="invalid_link">Enter a valid YouTube video link.</string>
     <string name="playback_error">This video could not be played.</string>
     <string name="share_target_label">Play without interruptions</string>
+    <string name="help_and_support">HELP &amp; SUPPORT</string>
+    <string name="report_a_bug">Report a bug</string>
+    <string name="report_a_bug_detail">Describe a problem and optionally include diagnostics</string>
+    <string name="start_report">Start</string>
+    <string name="report_this_issue">Report this issue</string>
+    <string name="bug_report_intro">Tell us what went wrong and what you expected to happen.</string>
+    <string name="bug_description_hint">What happened? Include steps that help reproduce it.</string>
+    <string name="include_diagnostics">Include technical details (recommended)</string>
+    <string name="include_diagnostics_detail">App version, Android version, device model, app settings, playback state, and the last error type. Never includes logs, accounts, or viewing history.</string>
+    <string name="include_video_link">Include the current video link</string>
+    <string name="include_video_link_detail">This reveals what you were watching and is always off by default.</string>
+    <string name="bug_report_consent">Nothing is sent automatically. You will review the full report before choosing where it goes.</string>
+    <string name="describe_problem_first">Please briefly describe the problem.</string>
+    <string name="review_report">Review report</string>
+    <string name="bug_report_public_notice">This is the complete report. Open GitHub sends it to the browser or app you select, then to GitHub to fill a public issue; you still choose whether to submit it. Use Share to send it another way.</string>
+    <string name="issue_title_label">ISSUE TITLE</string>
+    <string name="open_github">Open GitHub</string>
+    <string name="open_github_with">Open GitHub with</string>
+    <string name="long_report_share_fallback">This report is too long to prefill safely. Choose an app to share it instead.</string>
+    <string name="share_report">Share</string>
+    <string name="edit_report">Edit</string>
+    <string name="bug_report_share_title">Share Plyvanta bug report</string>
+    <string name="no_app_for_bug_report">No app is available to open this report.</string>
 </resources>

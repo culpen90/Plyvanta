@@ -30,6 +30,8 @@ before installation.
   categories.
 - Lets you undo a sponsor skip.
 - Provides 360p, 720p, 1080p, and 2160p quality limits.
+- Provides a user-reviewed bug-report flow with optional app/device diagnostics
+  and a separately optional current video link.
 
 Paid sponsor segments are enabled by default. Self-promotion, interaction
 reminders, intros, and outros can be enabled from **Settings**.
@@ -46,6 +48,10 @@ YouTube link.
 Plyvanta resolves the link, starts the direct media stream, and loads the
 available SponsorBlock segments independently. When an enabled segment is
 reached, playback seeks to its end and briefly offers **Undo**.
+
+To report a problem, open **Settings → Report a bug**. Playback errors also show
+**Report this issue** next to the error. Plyvanta previews the complete report
+before opening a public GitHub issue or the Android share sheet.
 
 ## Requirements
 
@@ -110,6 +116,9 @@ Plyvanta is a single-activity Java Android app:
   enabled ranges while supporting an undo grace period.
 - `PreferenceStore` keeps skip-category and maximum-quality settings in Android
   local preferences.
+- `DiagnosticReport` builds a bounded, text-only report from an explicit
+  allowlist and defensively redacts links, credentials, email addresses, and
+  local paths from technical values.
 
 There is no Plyvanta server. Stream extraction, response validation, playback,
 and skipping all happen on the device.
@@ -122,6 +131,33 @@ maximum video quality in local Android preferences. A currently playing URL and
 position may be retained temporarily by Android to restore the activity after a
 configuration or process-state change; they are not presented as history.
 Android backup is disabled for Plyvanta's app data.
+
+Bug reports are entirely user-initiated. Plyvanta creates the report locally and
+shows its full text before handing anything to another app or website. Technical
+details are off by default; if selected, they include only the app version and
+package, debug/release status, Android version, device model, locale,
+orientation, Plyvanta quality and sponsor settings, playback/source state,
+SponsorBlock lookup status, retry status, and a structured error type. They do
+not include logs, stack traces, throwable messages, accounts, device
+identifiers, network details, titles, uploader names, direct media URLs, or
+viewing history. The current canonical YouTube link has its own separate option
+and is also off by default.
+
+While the report editor or review is open, Android's saved-instance state may
+temporarily retain the bounded draft, the two inclusion choices, the allowlisted
+technical snapshot, and the exact preview so an interrupted configuration or
+process can restore the user's work. That local, system-managed state is used
+only for the in-progress report; it is not added to preferences or a report
+history.
+
+Nothing is sent until the user chooses an action from the review screen.
+Choosing GitHub sends the reviewed text to GitHub to prefill a public issue that
+the user can still edit or abandon. Android asks which browser or app should
+handle that action. If a report is too long to prefill safely, Plyvanta opens
+the Android share sheet instead of putting report contents in an oversized URL.
+Choosing Share also hands the report to an app selected in that share sheet.
+GitHub, the selected browser, or the selected sharing app receives only what the
+user chose to include and handles it under its own privacy practices.
 
 Playing a link makes these network requests:
 
