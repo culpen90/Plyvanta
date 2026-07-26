@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Plyvanta</string>
+    <string name="app_tagline">YouTube without the interruptions</string>
+    <string name="paste_link_hint">Paste a YouTube link</string>
+    <string name="play">Play</string>
+    <string name="paste">Paste</string>
+    <string name="settings">Settings</string>
+    <string name="fullscreen">Full screen</string>
+    <string name="exit_fullscreen">Exit full screen</string>
+    <string name="undo">Undo</string>
+    <string name="protection_active">Protection active</string>
+    <string name="direct_stream_detail">Direct playback avoids YouTube ad slots</string>
+    <string name="sponsor_detail">SponsorBlock skips sponsored sections automatically</string>
+    <string name="loading_video">Resolving ad-free stream…</string>
+    <string name="ready">Ready</string>
+    <string name="invalid_link">Enter a valid YouTube video link.</string>
+    <string name="playback_error">This video could not be played.</string>
+    <string name="share_target_label">Play without interruptions</string>
+</resources>

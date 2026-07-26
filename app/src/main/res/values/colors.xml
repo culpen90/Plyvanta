@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ink">#081018</color>
+    <color name="ink_raised">#101C27</color>
+    <color name="ink_soft">#172635</color>
+    <color name="coral">#FF6B57</color>
+    <color name="mint">#67E8B5</color>
+    <color name="text_primary">#F4F7FA</color>
+    <color name="text_secondary">#A9BAC8</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+</resources>
