@@ -49,9 +49,11 @@ Plyvanta resolves the link, starts the direct media stream, and loads the
 available SponsorBlock segments independently. When an enabled segment is
 reached, playback seeks to its end and briefly offers **Undo**.
 
-To report a problem, open **Settings → Report a bug**. Playback errors also show
-**Report this issue** next to the error. Plyvanta previews the complete report
-before opening a public GitHub issue or the Android share sheet.
+To report a problem, open **Settings → Report a bug**. The support action and
+installed app version appear at the top of Settings so the active preview can be
+checked immediately. Playback errors also show **Report this issue** next to the
+error. Plyvanta previews the complete report before opening a public GitHub
+issue or the Android share sheet.
 
 ## Requirements
 
@@ -65,23 +67,36 @@ On macOS, select JDK 21 and run the checked-in Gradle wrapper:
 
 ```sh
 export JAVA_HOME=$(/usr/libexec/java_home -v 21)
-./gradlew clean test lint assembleDebug
+./gradlew clean test lint packageDebugPreview
 ```
 
 On other operating systems, configure `JAVA_HOME` to a JDK 21 installation and
 run the equivalent wrapper command (`gradlew.bat` on Windows). The Android SDK
 must contain Platform 36; Android Studio can install it through **SDK Manager**.
 
-The debug APK is written to:
+The preview packaging task writes a versioned APK so downloads from different
+previews cannot be confused:
 
 ```text
-app/build/outputs/apk/debug/app-debug.apk
+app/build/outputs/preview/Plyvanta-1.0.0-debug.3.apk
 ```
 
 Install it on a connected device or emulator with:
 
 ```sh
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/preview/Plyvanta-1.0.0-debug.3.apk
+```
+
+With one emulator or device connected, verify the exact packaged artifact before
+distribution:
+
+```sh
+scripts/smoke-test-apk.sh \
+  app/build/outputs/preview/Plyvanta-1.0.0-debug.3.apk \
+  1.0.0-debug.3 \
+  3 \
+  app.plyvanta.debug \
+  846f202248f014ea832c30055158f8e3cbc162032af6a96de912667d013c5a61
 ```
 
 For an optimized release build:

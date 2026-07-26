@@ -25,7 +25,7 @@ public final class DiagnosticReportTest {
     @Test
     public void technicalDetailsKeepTheirStableAllowlistOrder() {
         Map<String, String> details = new LinkedHashMap<>();
-        details.put("App version", "1.0.0-debug.2 (2)");
+        details.put("App version", "1.0.0-debug.3 (3)");
         details.put("Android", "16 (API 36)");
         details.put("Player state", "Buffering");
 

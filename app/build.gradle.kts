@@ -2,6 +2,11 @@ plugins {
     id("com.android.application")
 }
 
+val baseVersionName = "1.0.0"
+val appVersionCode = 3
+val debugPreviewNumber = 3
+val debugPreviewVersion = "$baseVersionName-debug.$debugPreviewNumber"
+
 val generatedLegalAssetsDirectory = layout.buildDirectory.dir("generated/legalAssets")
 val prepareLegalAssets by tasks.registering(Sync::class) {
     from(rootProject.file("LICENSE"))
@@ -20,14 +25,14 @@ android {
         applicationId = "app.plyvanta"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.0.0"
+        versionCode = appVersionCode
+        versionName = baseVersionName
     }
 
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug.2"
+            versionNameSuffix = "-debug.$debugPreviewNumber"
         }
         release {
             isMinifyEnabled = true
@@ -73,6 +78,13 @@ android {
 
 tasks.named("preBuild").configure {
     dependsOn(prepareLegalAssets)
+}
+
+val packageDebugPreview by tasks.registering(Sync::class) {
+    dependsOn("assembleDebug")
+    from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
+    into(layout.buildDirectory.dir("outputs/preview"))
+    rename("app-debug.apk", "Plyvanta-$debugPreviewVersion.apk")
 }
 
 dependencies {

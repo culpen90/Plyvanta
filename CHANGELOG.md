@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.0-debug.3 - 2026-07-26
+
+### Changed
+
+- Moved Help & Support to the top of Settings and made the complete report row
+  tappable.
+- Added the installed version and version code directly to Settings.
+- Added a versioned preview-packaging task so the distributed APK is named
+  `Plyvanta-1.0.0-debug.3.apk` instead of the ambiguous `app-debug.apk`.
+- Added an installed-APK smoke test for manifest identity, Settings visibility,
+  and entry into the report editor.
+
 ## 1.0.0-debug.2 - 2026-07-26
 
 ### Added

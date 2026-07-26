@@ -696,8 +696,34 @@ public final class MainActivity extends ComponentActivity {
         content.setPadding(dp(22), dp(8), dp(22), dp(8));
         scroll.addView(content, matchParentWrap());
 
+        TextView supportLabel = text(
+                getString(R.string.help_and_support),
+                11,
+                getColor(R.color.text_secondary)
+        );
+        supportLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        supportLabel.setPadding(0, 0, 0, dp(3));
+        content.addView(supportLabel);
+        Button reportBug = textButton(getString(R.string.start_report));
+        View reportBugRow = settingAction(
+                getString(R.string.report_a_bug),
+                getString(R.string.report_a_bug_detail),
+                reportBug
+        );
+        reportBugRow.setFocusable(false);
+        reportBugRow.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        content.addView(reportBugRow);
+        TextView version = text(
+                getString(R.string.app_version, installedVersion()),
+                12,
+                getColor(R.color.text_secondary)
+        );
+        version.setPadding(0, 0, 0, dp(8));
+        content.addView(version);
+
         TextView section = text("SKIP CATEGORIES", 11, getColor(R.color.text_secondary));
         section.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        section.setPadding(0, dp(20), 0, 0);
         content.addView(section);
         content.addView(settingSwitch(
                 "Paid sponsors",
@@ -755,21 +781,6 @@ public final class MainActivity extends ComponentActivity {
         });
         content.addView(quality);
 
-        TextView supportLabel = text(
-                getString(R.string.help_and_support),
-                11,
-                getColor(R.color.text_secondary)
-        );
-        supportLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        supportLabel.setPadding(0, dp(20), 0, dp(3));
-        content.addView(supportLabel);
-        Button reportBug = textButton(getString(R.string.start_report));
-        content.addView(settingAction(
-                getString(R.string.report_a_bug),
-                getString(R.string.report_a_bug_detail),
-                reportBug
-        ));
-
         TextView about = text(
                 "Uses SponsorBlock data licensed under CC BY-NC-SA 4.0 from "
                         + "https://sponsor.ajay.app/.\n\n"
@@ -789,10 +800,12 @@ public final class MainActivity extends ComponentActivity {
                 .setView(scroll)
                 .setPositiveButton("Done", null)
                 .create();
-        reportBug.setOnClickListener(view -> {
+        View.OnClickListener openBugReport = view -> {
             dialog.dismiss();
             showBugReport(false, "", false, false);
-        });
+        };
+        reportBug.setOnClickListener(openBugReport);
+        reportBugRow.setOnClickListener(openBugReport);
         dialog.setOnDismissListener(ignored -> refreshSponsorPreferences());
         dialog.setOnShowListener(ignored -> {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE)
