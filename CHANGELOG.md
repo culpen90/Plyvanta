@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-debug.2 - 2026-07-26
+
+### Added
+
+- Added a user-reviewed bug-report flow in Settings and on playback error cards.
+- Added separately opt-in technical diagnostics and current-video context, with
+  no automatic submission or background collection.
+- Added direct GitHub issue handoff plus an Android share-sheet alternative.
+
 ## 1.0.0-debug.1 - 2026-07-26
 
 First public preview of Plyvanta.

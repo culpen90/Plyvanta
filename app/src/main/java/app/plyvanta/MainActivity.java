@@ -1,11 +1,16 @@
 package app.plyvanta;
 
 import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -14,6 +19,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputFilter;
 import android.text.InputType;
 import android.text.method.LinkMovementMethod;
 import android.view.Gravity;
@@ -25,6 +31,7 @@ import android.view.WindowInsetsController;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
@@ -51,8 +58,11 @@ import androidx.media3.exoplayer.source.MediaSource;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -65,6 +75,7 @@ import app.plyvanta.playback.SponsorSkipController;
 import app.plyvanta.settings.PreferenceStore;
 import app.plyvanta.sponsor.SponsorBlockClient;
 import app.plyvanta.sponsor.SponsorSegment;
+import app.plyvanta.support.DiagnosticReport;
 import app.plyvanta.util.YouTubeUrlParser;
 
 @UnstableApi
@@ -72,6 +83,21 @@ public final class MainActivity extends ComponentActivity {
     private static final String STATE_URL = "active_url";
     private static final String STATE_POSITION = "playback_position";
     private static final String STATE_PLAY_WHEN_READY = "play_when_ready";
+    private static final String STATE_BUG_REPORT_STEP = "bug_report_step";
+    private static final String STATE_BUG_REPORT_DRAFT = "bug_report_draft";
+    private static final String STATE_BUG_REPORT_DIAGNOSTICS = "bug_report_diagnostics";
+    private static final String STATE_BUG_REPORT_VIDEO = "bug_report_video";
+    private static final String STATE_BUG_REPORT_FROM_ERROR = "bug_report_from_error";
+    private static final String STATE_BUG_REPORT_PREVIEW = "bug_report_preview";
+    private static final String STATE_BUG_REPORT_DETAIL_KEYS = "bug_report_detail_keys";
+    private static final String STATE_BUG_REPORT_DETAIL_VALUES = "bug_report_detail_values";
+    private static final String STATE_BUG_REPORT_VIDEO_URL = "bug_report_video_url";
+    private static final String BUG_REPORT_URL =
+            "https://github.com/culpen90/Plyvanta/issues/new";
+    private static final int MAX_GITHUB_PREFILL_URI_CHARS = 6_000;
+    private static final int BUG_REPORT_CLOSED = 0;
+    private static final int BUG_REPORT_EDITING = 1;
+    private static final int BUG_REPORT_REVIEWING = 2;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService resolverExecutor = Executors.newSingleThreadExecutor();
@@ -89,6 +115,7 @@ public final class MainActivity extends ComponentActivity {
     private TextView uploaderText;
     private TextView playbackStatus;
     private TextView protectionStatus;
+    private LinearLayout errorCard;
     private TextView errorText;
     private ProgressBar loadingIndicator;
     private LinearLayout skipNotice;
@@ -107,6 +134,20 @@ public final class MainActivity extends ComponentActivity {
     private boolean retriedAfterPlaybackFailure;
     private long pendingSeekMs = C.TIME_UNSET;
     private boolean pendingPlayWhenReady = true;
+    private String lastFailureStage;
+    private String lastFailureType;
+    private String sponsorLookupStatus = "Not requested";
+    private int bugReportStep = BUG_REPORT_CLOSED;
+    private String bugReportDraft = "";
+    private boolean bugReportIncludesDiagnostics;
+    private boolean bugReportIncludesVideo;
+    private boolean bugReportFromError;
+    private String bugReportPreview;
+    private LinkedHashMap<String, String> bugReportTechnicalSnapshot;
+    private String bugReportVideoUrlSnapshot;
+    private EditText activeBugReportDescription;
+    private CheckBox activeBugReportDiagnostics;
+    private CheckBox activeBugReportVideo;
     private SponsorSegment lastSkippedSegment;
     private ViewGroup originalPlayerParent;
     private int originalPlayerIndex;
@@ -148,6 +189,7 @@ public final class MainActivity extends ComponentActivity {
         } else if (!handleIntent(getIntent())) {
             updateProtectionText();
         }
+        restoreBugReport(savedInstanceState);
     }
 
     private void configureBackNavigation() {
@@ -210,6 +252,10 @@ public final class MainActivity extends ComponentActivity {
 
             @Override
             public void onPlayerError(PlaybackException error) {
+                recordFailure(
+                        "playback",
+                        "Media3 code " + error.errorCode + " / " + deepestType(error)
+                );
                 if (!retriedAfterPlaybackFailure && activeUrl != null) {
                     retriedAfterPlaybackFailure = true;
                     pendingSeekMs = Math.max(0, player.getCurrentPosition());
@@ -280,11 +326,19 @@ public final class MainActivity extends ComponentActivity {
         body.addView(buildInputCard(), spacedCardParams());
         body.addView(buildProtectionCard(), spacedCardParams());
 
+        errorCard = new LinearLayout(this);
+        errorCard.setOrientation(LinearLayout.VERTICAL);
+        errorCard.setBackgroundResource(R.drawable.bg_card);
+        errorCard.setPadding(dp(16), dp(14), dp(10), dp(8));
+        errorCard.setVisibility(View.GONE);
         errorText = text("", 14, Color.rgb(255, 165, 150));
-        errorText.setBackgroundResource(R.drawable.bg_card);
-        errorText.setPadding(dp(16), dp(14), dp(16), dp(14));
-        errorText.setVisibility(View.GONE);
-        body.addView(errorText, spacedCardParams());
+        errorCard.addView(errorText);
+        Button reportIssue = textButton(getString(R.string.report_this_issue));
+        reportIssue.setOnClickListener(view -> showBugReport(true, "", false, false));
+        LinearLayout.LayoutParams reportParams = new LinearLayout.LayoutParams(wrap(), dp(42));
+        reportParams.gravity = Gravity.END;
+        errorCard.addView(reportIssue, reportParams);
+        body.addView(errorCard, spacedCardParams());
 
         loadingIndicator = new ProgressBar(
                 this,
@@ -490,6 +544,7 @@ public final class MainActivity extends ComponentActivity {
     private void playInput() {
         String canonical = YouTubeUrlParser.canonicalize(linkInput.getText().toString());
         if (canonical == null) {
+            recordFailure("link validation", "Invalid or unsupported YouTube link");
             showError(getString(R.string.invalid_link));
             return;
         }
@@ -516,14 +571,19 @@ public final class MainActivity extends ComponentActivity {
     private void startPlayback(String canonicalUrl, boolean retry) {
         String videoId = YouTubeUrlParser.extractVideoId(canonicalUrl);
         if (videoId == null) {
+            recordFailure("link validation", "Invalid or unsupported YouTube link");
             showError(getString(R.string.invalid_link));
             return;
         }
 
+        if (!retry) {
+            clearFailure();
+            sponsorLookupStatus = "Loading";
+        }
         int generation = loadGeneration.incrementAndGet();
         activeUrl = canonicalUrl;
         activeVideo = null;
-        errorText.setVisibility(View.GONE);
+        errorCard.setVisibility(View.GONE);
         loadingIndicator.setVisibility(View.VISIBLE);
         playbackStatus.setText(retry ? "Refreshing the stream…" : getString(R.string.loading_video));
         if (!retry) {
@@ -548,6 +608,7 @@ public final class MainActivity extends ComponentActivity {
             } catch (Exception error) {
                 runOnUiThread(() -> {
                     if (generation == loadGeneration.get() && !isFinishing()) {
+                        recordFailure("video resolution", deepestType(error));
                         showError(humanResolveError(error));
                     }
                 });
@@ -558,11 +619,13 @@ public final class MainActivity extends ComponentActivity {
     private void fetchSponsorSegments(String videoId, int generation) {
         List<String> categories = preferenceStore.enabledSponsorCategories();
         if (categories.isEmpty()) {
+            sponsorLookupStatus = "Disabled in settings";
             skipController.setSegments(List.of());
             updateProtectionText();
             return;
         }
 
+        sponsorLookupStatus = "Loading";
         CompletableFuture<List<SponsorSegment>> future =
                 sponsorBlockClient.getSegments(videoId, categories);
         future.whenComplete((segments, error) -> runOnUiThread(() -> {
@@ -570,11 +633,15 @@ public final class MainActivity extends ComponentActivity {
                 return;
             }
             if (error == null && segments != null) {
+                sponsorLookupStatus = segments.isEmpty()
+                        ? "Completed; no matching segments"
+                        : "Completed; " + segments.size() + " segment(s)";
                 skipController.setSegments(segments);
                 protectionStatus.setText(
                         segments.isEmpty() ? "AD-FREE" : "AD-FREE • SPONSORS"
                 );
             } else {
+                sponsorLookupStatus = "Failed";
                 protectionStatus.setText("AD-FREE");
             }
         }));
@@ -688,6 +755,21 @@ public final class MainActivity extends ComponentActivity {
         });
         content.addView(quality);
 
+        TextView supportLabel = text(
+                getString(R.string.help_and_support),
+                11,
+                getColor(R.color.text_secondary)
+        );
+        supportLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        supportLabel.setPadding(0, dp(20), 0, dp(3));
+        content.addView(supportLabel);
+        Button reportBug = textButton(getString(R.string.start_report));
+        content.addView(settingAction(
+                getString(R.string.report_a_bug),
+                getString(R.string.report_a_bug_detail),
+                reportBug
+        ));
+
         TextView about = text(
                 "Uses SponsorBlock data licensed under CC BY-NC-SA 4.0 from "
                         + "https://sponsor.ajay.app/.\n\n"
@@ -707,6 +789,10 @@ public final class MainActivity extends ComponentActivity {
                 .setView(scroll)
                 .setPositiveButton("Done", null)
                 .create();
+        reportBug.setOnClickListener(view -> {
+            dialog.dismiss();
+            showBugReport(false, "", false, false);
+        });
         dialog.setOnDismissListener(ignored -> refreshSponsorPreferences());
         dialog.setOnShowListener(ignored -> {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE)
@@ -743,6 +829,549 @@ public final class MainActivity extends ComponentActivity {
         toggle.setOnCheckedChangeListener((button, value) -> setter.accept(value));
         row.addView(toggle);
         return row;
+    }
+
+    private View settingAction(String title, String detail, Button action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(7), 0, dp(7));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView titleView = text(title, 15, getColor(R.color.text_primary));
+        TextView detailView = text(detail, 12, getColor(R.color.text_secondary));
+        copy.addView(titleView);
+        copy.addView(detailView);
+        row.addView(copy, new LinearLayout.LayoutParams(0, wrap(), 1f));
+        row.addView(action, new LinearLayout.LayoutParams(wrap(), dp(44)));
+        return row;
+    }
+
+    private void showBugReport(
+            boolean fromError,
+            String draft,
+            boolean includeDiagnosticsInitially,
+            boolean includeVideoInitially
+    ) {
+        if (bugReportStep == BUG_REPORT_CLOSED) {
+            bugReportTechnicalSnapshot = new LinkedHashMap<>(collectTechnicalDetails());
+            bugReportVideoUrlSnapshot = activeUrl;
+        } else if (bugReportTechnicalSnapshot == null) {
+            bugReportTechnicalSnapshot = new LinkedHashMap<>(collectTechnicalDetails());
+        }
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(22), dp(8), dp(22), dp(8));
+        scroll.addView(content, matchParentWrap());
+
+        TextView intro = text(
+                getString(R.string.bug_report_intro),
+                14,
+                getColor(R.color.text_secondary)
+        );
+        intro.setPadding(0, 0, 0, dp(12));
+        content.addView(intro);
+
+        EditText description = new EditText(this);
+        description.setHint(R.string.bug_description_hint);
+        description.setHintTextColor(getColor(R.color.text_secondary));
+        description.setTextColor(getColor(R.color.text_primary));
+        description.setTextSize(14);
+        description.setGravity(Gravity.TOP | Gravity.START);
+        description.setInputType(
+                InputType.TYPE_CLASS_TEXT
+                        | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                        | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        );
+        description.setSingleLine(false);
+        description.setMinLines(5);
+        description.setMaxLines(10);
+        description.setPadding(dp(14), dp(12), dp(14), dp(12));
+        description.setBackgroundResource(R.drawable.bg_input);
+        description.setFilters(new InputFilter[]{
+                new InputFilter.LengthFilter(DiagnosticReport.MAX_DESCRIPTION_CHARS)
+        });
+        String initialDraft = draft;
+        if (initialDraft.isBlank() && fromError && lastFailureStage != null) {
+            initialDraft = "Plyvanta showed an error during "
+                    + lastFailureStage
+                    + ".\n\nSteps to reproduce:\n1. ";
+        }
+        bugReportStep = BUG_REPORT_EDITING;
+        bugReportFromError = fromError;
+        bugReportDraft = initialDraft;
+        bugReportIncludesDiagnostics = includeDiagnosticsInitially;
+        bugReportIncludesVideo = includeVideoInitially;
+        bugReportPreview = null;
+        activeBugReportDescription = description;
+        description.setText(initialDraft);
+        description.setSelection(description.length());
+        content.addView(description, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        CheckBox includeDiagnostics = reportCheckBox(
+                getString(R.string.include_diagnostics),
+                includeDiagnosticsInitially
+        );
+        activeBugReportDiagnostics = includeDiagnostics;
+        LinearLayout.LayoutParams checkParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        checkParams.setMargins(0, dp(14), 0, 0);
+        content.addView(includeDiagnostics, checkParams);
+        TextView diagnosticsDetail = text(
+                getString(R.string.include_diagnostics_detail),
+                12,
+                getColor(R.color.text_secondary)
+        );
+        diagnosticsDetail.setPadding(dp(34), 0, 0, dp(6));
+        content.addView(diagnosticsDetail);
+
+        CheckBox includeVideo = null;
+        if (bugReportVideoUrlSnapshot != null) {
+            includeVideo = reportCheckBox(
+                    getString(R.string.include_video_link),
+                    includeVideoInitially
+            );
+            content.addView(includeVideo);
+            TextView videoDetail = text(
+                    getString(R.string.include_video_link_detail),
+                    12,
+                    getColor(R.color.text_secondary)
+            );
+            videoDetail.setPadding(dp(34), 0, 0, dp(6));
+            content.addView(videoDetail);
+        }
+        activeBugReportVideo = includeVideo;
+
+        TextView consent = text(
+                getString(R.string.bug_report_consent),
+                12,
+                getColor(R.color.mint)
+        );
+        consent.setPadding(0, dp(12), 0, dp(4));
+        content.addView(consent);
+
+        CheckBox finalIncludeVideo = includeVideo;
+        boolean[] movingToPreview = {false};
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.report_a_bug)
+                .setView(scroll)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.review_report, null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(getColor(R.color.coral));
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+                    .setTextColor(getColor(R.color.text_secondary));
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+                String userDescription = description.getText().toString().trim();
+                if (userDescription.isEmpty()) {
+                    description.setError(getString(R.string.describe_problem_first));
+                    description.requestFocus();
+                    return;
+                }
+
+                boolean includeTechnicalDetails = includeDiagnostics.isChecked();
+                boolean includeCurrentVideo =
+                        finalIncludeVideo != null && finalIncludeVideo.isChecked();
+                bugReportDraft = userDescription;
+                bugReportIncludesDiagnostics = includeTechnicalDetails;
+                bugReportIncludesVideo = includeCurrentVideo;
+                Map<String, String> technicalDetails = includeTechnicalDetails
+                        ? new LinkedHashMap<>(bugReportTechnicalSnapshot)
+                        : Map.of();
+                String report = DiagnosticReport.format(
+                        userDescription,
+                        technicalDetails,
+                        includeCurrentVideo ? bugReportVideoUrlSnapshot : null
+                );
+                bugReportPreview = report;
+                bugReportStep = BUG_REPORT_REVIEWING;
+                movingToPreview[0] = true;
+                dialog.dismiss();
+                showBugReportPreview(
+                        fromError,
+                        userDescription,
+                        includeTechnicalDetails,
+                        includeCurrentVideo,
+                        report
+                );
+            });
+        });
+        dialog.setOnDismissListener(ignored -> {
+            activeBugReportDescription = null;
+            activeBugReportDiagnostics = null;
+            activeBugReportVideo = null;
+            if (!movingToPreview[0]) {
+                clearBugReportState();
+            }
+        });
+        dialog.show();
+    }
+
+    private CheckBox reportCheckBox(String label, boolean checked) {
+        CheckBox checkBox = new CheckBox(this);
+        checkBox.setText(label);
+        checkBox.setTextColor(getColor(R.color.text_primary));
+        checkBox.setTextSize(14);
+        checkBox.setChecked(checked);
+        checkBox.setButtonTintList(android.content.res.ColorStateList.valueOf(
+                getColor(R.color.coral)
+        ));
+        return checkBox;
+    }
+
+    private void showBugReportPreview(
+            boolean fromError,
+            String description,
+            boolean includedDiagnostics,
+            boolean includedVideo,
+            String report
+    ) {
+        bugReportStep = BUG_REPORT_REVIEWING;
+        bugReportFromError = fromError;
+        bugReportDraft = description;
+        bugReportIncludesDiagnostics = includedDiagnostics;
+        bugReportIncludesVideo = includedVideo;
+        bugReportPreview = report;
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(22), dp(8), dp(22), dp(8));
+        scroll.addView(content, matchParentWrap());
+
+        TextView notice = text(
+                getString(R.string.bug_report_public_notice),
+                13,
+                getColor(R.color.text_secondary)
+        );
+        notice.setPadding(0, 0, 0, dp(12));
+        content.addView(notice);
+
+        String title = DiagnosticReport.suggestedTitle(description);
+        TextView titleLabel = text(
+                getString(R.string.issue_title_label),
+                11,
+                getColor(R.color.text_secondary)
+        );
+        titleLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        content.addView(titleLabel);
+        TextView titlePreview = text(title, 14, getColor(R.color.text_primary));
+        titlePreview.setTextIsSelectable(true);
+        titlePreview.setPadding(0, dp(4), 0, dp(12));
+        content.addView(titlePreview);
+
+        TextView preview = text(report, 12, getColor(R.color.text_primary));
+        preview.setTypeface(Typeface.MONOSPACE);
+        preview.setTextIsSelectable(true);
+        preview.setPadding(dp(14), dp(12), dp(14), dp(12));
+        preview.setBackgroundResource(R.drawable.bg_input);
+        content.addView(preview);
+
+        boolean[] movingToEditor = {false};
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.review_report)
+                .setView(scroll)
+                .setNegativeButton(R.string.edit_report, null)
+                .setNeutralButton(R.string.share_report, null)
+                .setPositiveButton(R.string.open_github, null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            Button openGitHub = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            openGitHub.setTextColor(getColor(R.color.coral));
+            openGitHub.setOnClickListener(view -> openGitHubIssue(title, report));
+            Button share = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+            share.setTextColor(getColor(R.color.mint));
+            share.setOnClickListener(view -> shareBugReport(title, report));
+            Button edit = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+            edit.setTextColor(getColor(R.color.text_secondary));
+            edit.setOnClickListener(view -> {
+                movingToEditor[0] = true;
+                bugReportStep = BUG_REPORT_EDITING;
+                dialog.dismiss();
+                showBugReport(
+                        fromError,
+                        description,
+                        includedDiagnostics,
+                        includedVideo
+                );
+            });
+        });
+        dialog.setOnDismissListener(ignored -> {
+            if (!movingToEditor[0]) {
+                clearBugReportState();
+            }
+        });
+        dialog.show();
+    }
+
+    private void openGitHubIssue(String title, String report) {
+        Uri issueUri = Uri.parse(BUG_REPORT_URL)
+                .buildUpon()
+                .appendQueryParameter("title", title)
+                .appendQueryParameter("body", report)
+                .build();
+        if (issueUri.toString().length() > MAX_GITHUB_PREFILL_URI_CHARS) {
+            Toast.makeText(
+                    this,
+                    R.string.long_report_share_fallback,
+                    Toast.LENGTH_LONG
+            ).show();
+            shareBugReport(title, report);
+            return;
+        }
+        Intent openGitHub = new Intent(Intent.ACTION_VIEW, issueUri);
+        Intent chooser = Intent.createChooser(
+                openGitHub,
+                getString(R.string.open_github_with)
+        );
+        try {
+            startActivity(chooser);
+        } catch (ActivityNotFoundException error) {
+            shareBugReport(title, report);
+        }
+    }
+
+    private void shareBugReport(String title, String report) {
+        Intent share = new Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_SUBJECT, title)
+                .putExtra(Intent.EXTRA_TEXT, report);
+        Intent chooser = Intent.createChooser(
+                share,
+                getString(R.string.bug_report_share_title)
+        );
+        chooser.putExtra(
+                Intent.EXTRA_EXCLUDE_COMPONENTS,
+                new ComponentName[]{getComponentName()}
+        );
+        try {
+            startActivity(chooser);
+        } catch (ActivityNotFoundException error) {
+            Toast.makeText(
+                    this,
+                    R.string.no_app_for_bug_report,
+                    Toast.LENGTH_LONG
+            ).show();
+        }
+    }
+
+    private Map<String, String> collectTechnicalDetails() {
+        LinkedHashMap<String, String> details = new LinkedHashMap<>();
+        details.put("App version", installedVersion());
+        details.put("Package", getPackageName());
+        details.put(
+                "Build",
+                (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                        ? "Debug"
+                        : "Release"
+        );
+        details.put(
+                "Android",
+                Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")"
+        );
+        details.put("Device", deviceName());
+        details.put(
+                "Locale",
+                getResources().getConfiguration().getLocales().get(0).toLanguageTag()
+        );
+        details.put("Orientation", orientationName());
+        details.put("Quality limit", preferenceStore.maxHeight() + "p");
+        details.put("Sponsor categories", enabledSponsorCategories());
+        details.put("Sponsor lookup", sponsorLookupStatus);
+        details.put("Player state", playerStateName());
+        details.put("Resolved stream", resolvedStreamName());
+        details.put("Playback retry attempted", retriedAfterPlaybackFailure ? "Yes" : "No");
+        details.put(
+                "Last failure",
+                lastFailureStage == null
+                        ? "None recorded this session"
+                        : lastFailureStage + " / " + lastFailureType
+        );
+        return details;
+    }
+
+    private String installedVersion() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            long versionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? info.getLongVersionCode()
+                    : info.versionCode;
+            String versionName = info.versionName == null ? "Unknown" : info.versionName;
+            return versionName + " (" + versionCode + ")";
+        } catch (PackageManager.NameNotFoundException error) {
+            return "Unknown";
+        }
+    }
+
+    private static String deviceName() {
+        String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.trim();
+        String model = Build.MODEL == null ? "" : Build.MODEL.trim();
+        if (model.toLowerCase(Locale.US).startsWith(manufacturer.toLowerCase(Locale.US))) {
+            return model.isEmpty() ? "Unknown" : model;
+        }
+        String combined = (manufacturer + " " + model).trim();
+        return combined.isEmpty() ? "Unknown" : combined;
+    }
+
+    private String enabledSponsorCategories() {
+        List<String> categories = preferenceStore.enabledSponsorCategories();
+        if (categories.isEmpty()) {
+            return "None";
+        }
+        StringBuilder label = new StringBuilder();
+        for (String category : categories) {
+            if (label.length() > 0) {
+                label.append(", ");
+            }
+            label.append(friendlyCategory(category));
+        }
+        return label.toString();
+    }
+
+    private String orientationName() {
+        return switch (getResources().getConfiguration().orientation) {
+            case Configuration.ORIENTATION_LANDSCAPE -> "Landscape";
+            case Configuration.ORIENTATION_PORTRAIT -> "Portrait";
+            case Configuration.ORIENTATION_SQUARE -> "Square";
+            case Configuration.ORIENTATION_UNDEFINED -> "Unknown";
+            default -> "Unknown";
+        };
+    }
+
+    private String playerStateName() {
+        String state = switch (player.getPlaybackState()) {
+            case Player.STATE_IDLE -> "Idle";
+            case Player.STATE_BUFFERING -> "Buffering";
+            case Player.STATE_READY -> "Ready";
+            case Player.STATE_ENDED -> "Ended";
+            default -> "Unknown";
+        };
+        if (player.isPlaying()) {
+            return state + " / playing";
+        }
+        if (player.getPlayWhenReady()) {
+            return state + " / waiting";
+        }
+        return state + " / paused";
+    }
+
+    private String resolvedStreamName() {
+        if (activeVideo == null) {
+            return activeUrl == null ? "None" : "Not resolved";
+        }
+        int height = activeVideo.getSelectedHeight();
+        String quality = height > 0 ? " / " + height + "p" : "";
+        return activeVideo.getSourceType().name().toLowerCase(Locale.US) + quality;
+    }
+
+    private void recordFailure(String stage, String type) {
+        lastFailureStage = stage;
+        lastFailureType = type;
+    }
+
+    private void clearFailure() {
+        lastFailureStage = null;
+        lastFailureType = null;
+    }
+
+    private void restoreBugReport(Bundle savedInstanceState) {
+        if (savedInstanceState == null) {
+            return;
+        }
+        int savedStep = savedInstanceState.getInt(
+                STATE_BUG_REPORT_STEP,
+                BUG_REPORT_CLOSED
+        );
+        if (savedStep != BUG_REPORT_EDITING && savedStep != BUG_REPORT_REVIEWING) {
+            return;
+        }
+
+        String savedDraft = savedInstanceState.getString(STATE_BUG_REPORT_DRAFT, "");
+        boolean savedDiagnostics =
+                savedInstanceState.getBoolean(STATE_BUG_REPORT_DIAGNOSTICS, false);
+        boolean savedVideo = savedInstanceState.getBoolean(STATE_BUG_REPORT_VIDEO, false);
+        boolean savedFromError =
+                savedInstanceState.getBoolean(STATE_BUG_REPORT_FROM_ERROR, false);
+        String savedPreview = savedInstanceState.getString(STATE_BUG_REPORT_PREVIEW);
+        String savedVideoUrl = savedInstanceState.getString(STATE_BUG_REPORT_VIDEO_URL);
+        ArrayList<String> detailKeys =
+                savedInstanceState.getStringArrayList(STATE_BUG_REPORT_DETAIL_KEYS);
+        ArrayList<String> detailValues =
+                savedInstanceState.getStringArrayList(STATE_BUG_REPORT_DETAIL_VALUES);
+        LinkedHashMap<String, String> savedTechnicalSnapshot = new LinkedHashMap<>();
+        if (detailKeys != null && detailValues != null) {
+            int detailCount = Math.min(detailKeys.size(), detailValues.size());
+            for (int index = 0; index < detailCount; index++) {
+                savedTechnicalSnapshot.put(detailKeys.get(index), detailValues.get(index));
+            }
+        }
+        bugReportStep = savedStep;
+        bugReportDraft = savedDraft;
+        bugReportIncludesDiagnostics = savedDiagnostics;
+        bugReportIncludesVideo = savedVideo;
+        bugReportFromError = savedFromError;
+        bugReportPreview = savedPreview;
+        bugReportVideoUrlSnapshot = savedVideoUrl;
+        bugReportTechnicalSnapshot = savedTechnicalSnapshot.isEmpty()
+                ? null
+                : savedTechnicalSnapshot;
+        mainHandler.post(() -> {
+            if (isFinishing() || isDestroyed()) {
+                return;
+            }
+            if (savedStep == BUG_REPORT_REVIEWING && savedPreview != null) {
+                showBugReportPreview(
+                        savedFromError,
+                        savedDraft,
+                        savedDiagnostics,
+                        savedVideo,
+                        savedPreview
+                );
+            } else {
+                showBugReport(
+                        savedFromError,
+                        savedDraft,
+                        savedDiagnostics,
+                        savedVideo
+                );
+            }
+        });
+    }
+
+    private void captureBugReportEditorState() {
+        if (bugReportStep != BUG_REPORT_EDITING) {
+            return;
+        }
+        if (activeBugReportDescription != null) {
+            bugReportDraft = activeBugReportDescription.getText().toString();
+        }
+        if (activeBugReportDiagnostics != null) {
+            bugReportIncludesDiagnostics = activeBugReportDiagnostics.isChecked();
+        }
+        bugReportIncludesVideo =
+                activeBugReportVideo != null && activeBugReportVideo.isChecked();
+    }
+
+    private void clearBugReportState() {
+        bugReportStep = BUG_REPORT_CLOSED;
+        bugReportDraft = "";
+        bugReportIncludesDiagnostics = false;
+        bugReportIncludesVideo = false;
+        bugReportFromError = false;
+        bugReportPreview = null;
+        bugReportTechnicalSnapshot = null;
+        bugReportVideoUrlSnapshot = null;
+        activeBugReportDescription = null;
+        activeBugReportDiagnostics = null;
+        activeBugReportVideo = null;
     }
 
     private void refreshSponsorPreferences() {
@@ -804,10 +1433,33 @@ public final class MainActivity extends ComponentActivity {
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
-        super.onSaveInstanceState(outState);
+        captureBugReportEditorState();
         outState.putString(STATE_URL, activeUrl);
         outState.putLong(STATE_POSITION, player.getCurrentPosition());
         outState.putBoolean(STATE_PLAY_WHEN_READY, player.getPlayWhenReady());
+        outState.putInt(STATE_BUG_REPORT_STEP, bugReportStep);
+        if (bugReportStep != BUG_REPORT_CLOSED) {
+            outState.putString(STATE_BUG_REPORT_DRAFT, bugReportDraft);
+            outState.putBoolean(
+                    STATE_BUG_REPORT_DIAGNOSTICS,
+                    bugReportIncludesDiagnostics
+            );
+            outState.putBoolean(STATE_BUG_REPORT_VIDEO, bugReportIncludesVideo);
+            outState.putBoolean(STATE_BUG_REPORT_FROM_ERROR, bugReportFromError);
+            outState.putString(STATE_BUG_REPORT_PREVIEW, bugReportPreview);
+            outState.putString(STATE_BUG_REPORT_VIDEO_URL, bugReportVideoUrlSnapshot);
+            if (bugReportTechnicalSnapshot != null) {
+                outState.putStringArrayList(
+                        STATE_BUG_REPORT_DETAIL_KEYS,
+                        new ArrayList<>(bugReportTechnicalSnapshot.keySet())
+                );
+                outState.putStringArrayList(
+                        STATE_BUG_REPORT_DETAIL_VALUES,
+                        new ArrayList<>(bugReportTechnicalSnapshot.values())
+                );
+            }
+        }
+        super.onSaveInstanceState(outState);
     }
 
     @Override
@@ -898,7 +1550,7 @@ public final class MainActivity extends ComponentActivity {
         loadingIndicator.setVisibility(View.GONE);
         playbackStatus.setText("Unable to play");
         errorText.setText(message);
-        errorText.setVisibility(View.VISIBLE);
+        errorCard.setVisibility(View.VISIBLE);
     }
 
     private String statusForReadyVideo() {
@@ -952,6 +1604,14 @@ public final class MainActivity extends ComponentActivity {
         return message == null || message.isBlank()
                 ? current.getClass().getSimpleName()
                 : message;
+    }
+
+    private static String deepestType(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current.getClass().getSimpleName();
     }
 
     private static String friendlyCategory(String category) {
