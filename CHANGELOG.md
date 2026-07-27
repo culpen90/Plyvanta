@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.0-debug.4 - 2026-07-26
+
+### Added
+
+- Added periodic, network-constrained checks for compatible releases published
+  on the official Plyvanta GitHub repository.
+- Added one notification per newer version, with Android 13+ permission handling
+  and a dedicated app-update notification channel.
+- Added a notification-tap flow that opens Plyvanta first, shows the validated
+  available version, and lets the user start the official APK download.
+- Added immutable-release metadata and digest validation for package,
+  preview/stable channel, Android version code, minimum SDK, APK filename,
+  GitHub asset URL, and SHA-256.
+- Added generation of the required update metadata beside every packaged debug
+  preview APK.
+
 ## 1.0.0-debug.3 - 2026-07-26
 
 ### Changed

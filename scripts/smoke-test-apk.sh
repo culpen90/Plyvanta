@@ -3,16 +3,17 @@
 # Install and smoke-test the exact APK that will be distributed.
 #
 # Usage:
-#   scripts/smoke-test-apk.sh APK VERSION_NAME VERSION_CODE PACKAGE SHA256 [ADB_SERIAL]
+#   scripts/smoke-test-apk.sh APK UPDATE_METADATA CERT_SHA256 [ADB_SERIAL]
 #
 # When ADB_SERIAL is omitted, exactly one authorized device must be connected.
-# The expected release identity is mandatory and checked before installation.
+# The release metadata and expected signing lineage are mandatory and checked
+# against the exact APK before installation.
 
 set -euo pipefail
 
 usage() {
     printf '%s\n' \
-        "Usage: $0 APK VERSION_NAME VERSION_CODE PACKAGE SHA256 [ADB_SERIAL]" \
+        "Usage: $0 APK UPDATE_METADATA CERT_SHA256 [ADB_SERIAL]" \
         "" \
         "Installs APK with adb install -r; it never uninstalls the app or clears app data."
 }
@@ -22,24 +23,69 @@ fail() {
     exit 1
 }
 
-if [[ $# -lt 5 || $# -gt 6 ]]; then
+if [[ $# -lt 3 || $# -gt 4 ]]; then
     usage >&2
     exit 2
 fi
 
 apk_path=$1
-expected_version_name=$2
-expected_version_code=$3
-expected_package_name=$4
-expected_sha=$5
-requested_serial=${6:-}
+metadata_path=$2
+expected_certificate_sha=$3
+requested_serial=${4:-}
 
 [[ -f "$apk_path" ]] || fail "APK does not exist: $apk_path"
-[[ "$expected_version_code" =~ ^[0-9]+$ ]] ||
-    fail "Expected versionCode must be numeric: $expected_version_code"
+[[ -f "$metadata_path" ]] || fail "Update metadata does not exist: $metadata_path"
+command -v jq >/dev/null 2>&1 ||
+    fail "jq is required to validate the update metadata."
+if ! jq -e '
+    type == "object"
+    and .schemaVersion == 1
+    and (.packageName | type == "string")
+    and (.channel == "preview" or .channel == "stable")
+    and (.versionCode | type == "number")
+    and (.versionName | type == "string")
+    and (.minimumSdk | type == "number")
+    and (.apkName | type == "string")
+    and (.sha256 | type == "string")
+' "$metadata_path" >/dev/null; then
+    fail "Update metadata does not match schema version 1."
+fi
+
+expected_package_name=$(jq -er '.packageName' "$metadata_path")
+expected_channel=$(jq -er '.channel' "$metadata_path")
+expected_version_code=$(jq -er '.versionCode' "$metadata_path")
+expected_version_name=$(jq -er '.versionName' "$metadata_path")
+expected_minimum_sdk=$(jq -er '.minimumSdk' "$metadata_path")
+expected_apk_name=$(jq -er '.apkName' "$metadata_path")
+expected_sha=$(jq -er '.sha256' "$metadata_path")
+
+[[ "$expected_version_code" =~ ^[1-9][0-9]*$ ]] ||
+    fail "Expected versionCode must be a positive integer: $expected_version_code"
+[[ "$expected_minimum_sdk" =~ ^[1-9][0-9]*$ ]] ||
+    fail "Expected minimumSdk must be a positive integer: $expected_minimum_sdk"
+if [[ "$expected_channel" == "preview" ]]; then
+    [[ "$expected_version_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+-debug\.[0-9]+$ ]] ||
+        fail "Preview metadata has an invalid versionName: $expected_version_name"
+else
+    [[ "$expected_version_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+        fail "Stable metadata has an invalid versionName: $expected_version_name"
+fi
 [[ "$expected_sha" =~ ^[0-9a-fA-F]{64}$ ]] ||
     fail "Expected SHA-256 must contain exactly 64 hexadecimal characters."
+[[ "$expected_certificate_sha" =~ ^[0-9a-fA-F]{64}$ ]] ||
+    fail "Expected certificate SHA-256 must contain exactly 64 hexadecimal characters."
 expected_sha=$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')
+expected_certificate_sha=$(printf '%s' "$expected_certificate_sha" |
+    tr '[:upper:]' '[:lower:]')
+actual_apk_name=${apk_path##*/}
+[[ "$actual_apk_name" == "$expected_apk_name" ]] ||
+    fail "Metadata names '$expected_apk_name', but APK is '$actual_apk_name'."
+if [[ "$expected_channel" == "preview" ]]; then
+    [[ "$expected_package_name" == "app.plyvanta.debug" ]] ||
+        fail "Preview metadata must target app.plyvanta.debug."
+elif [[ "$expected_package_name" != "app.plyvanta" ]]; then
+    fail "Stable metadata must target app.plyvanta."
+fi
 
 find_adb() {
     local candidate
@@ -86,6 +132,32 @@ find_aapt() {
     return 1
 }
 
+find_apksigner() {
+    local sdk_root candidate newest
+    if command -v apksigner >/dev/null 2>&1; then
+        command -v apksigner
+        return
+    fi
+    for sdk_root in \
+        "${ANDROID_SDK_ROOT:-}" \
+        "${ANDROID_HOME:-}" \
+        "${HOME:-}/Library/Android/sdk"
+    do
+        [[ -d "$sdk_root/build-tools" ]] || continue
+        newest=
+        for candidate in "$sdk_root"/build-tools/*/apksigner; do
+            if [[ -x "$candidate" ]]; then
+                newest=$candidate
+            fi
+        done
+        if [[ -n "$newest" ]]; then
+            printf '%s\n' "$newest"
+            return
+        fi
+    done
+    return 1
+}
+
 sha256_file() {
     if command -v shasum >/dev/null 2>&1; then
         shasum -a 256 "$1" | awk '{print $1}'
@@ -98,6 +170,8 @@ sha256_file() {
 
 adb_bin=$(find_adb) || fail "adb was not found. Install Android SDK Platform-Tools."
 aapt_bin=$(find_aapt) || fail "aapt was not found. Install Android SDK Build-Tools."
+apksigner_bin=$(find_apksigner) ||
+    fail "apksigner was not found. Install Android SDK Build-Tools."
 
 badging=$("$aapt_bin" dump badging "$apk_path") ||
     fail "aapt could not inspect the APK: $apk_path"
@@ -109,11 +183,14 @@ version_code=$(printf '%s\n' "$badging" |
     sed -n "s/^package: .*versionCode='\([^']*\)'.*/\1/p" | head -n 1)
 launch_activity=$(printf '%s\n' "$badging" |
     sed -n "s/^launchable-activity: name='\([^']*\)'.*/\1/p" | head -n 1)
+minimum_sdk=$(printf '%s\n' "$badging" |
+    sed -n "s/^sdkVersion:'\([^']*\)'.*/\1/p" | head -n 1)
 
 [[ -n "$package_name" ]] || fail "APK manifest has no package name."
 [[ -n "$version_name" ]] || fail "APK manifest has no versionName."
 [[ -n "$version_code" ]] || fail "APK manifest has no versionCode."
 [[ -n "$launch_activity" ]] || fail "APK manifest has no launchable activity."
+[[ -n "$minimum_sdk" ]] || fail "APK manifest has no minimum SDK."
 
 if [[ "$package_name" != "$expected_package_name" ]]; then
     fail "Expected package '$expected_package_name', APK contains '$package_name'."
@@ -124,6 +201,25 @@ fi
 if [[ "$version_code" != "$expected_version_code" ]]; then
     fail "Expected versionCode '$expected_version_code', APK contains '$version_code'."
 fi
+if [[ "$minimum_sdk" != "$expected_minimum_sdk" ]]; then
+    fail "Expected minimumSdk '$expected_minimum_sdk', APK contains '$minimum_sdk'."
+fi
+printf '%s\n' "$badging" |
+    grep -F "uses-permission: name='android.permission.POST_NOTIFICATIONS'" \
+        >/dev/null ||
+    fail "APK does not declare android.permission.POST_NOTIFICATIONS."
+
+signature_report=$("$apksigner_bin" verify --verbose --print-certs "$apk_path") ||
+    fail "apksigner could not verify the APK: $apk_path"
+certificate_sha=$(printf '%s\n' "$signature_report" |
+    sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 |
+    tr '[:upper:]' '[:lower:]')
+signer_count=$(printf '%s\n' "$signature_report" |
+    sed -n 's/^Number of signers: //p' | head -n 1)
+[[ "$signer_count" == "1" ]] ||
+    fail "Expected exactly one APK signer, found '${signer_count:-unknown}'."
+[[ "$certificate_sha" == "$expected_certificate_sha" ]] ||
+    fail "Expected signer '$expected_certificate_sha', APK contains '$certificate_sha'."
 
 device_list=$("$adb_bin" devices)
 if [[ -n "$requested_serial" ]]; then
@@ -153,6 +249,7 @@ initial_sha=$(sha256_file "$apk_path")
 printf 'APK: %s\n' "$apk_path"
 printf 'SHA-256: %s\n' "$initial_sha"
 printf 'Manifest: %s %s (%s)\n' "$package_name" "$version_name" "$version_code"
+printf 'Signer SHA-256: %s\n' "$certificate_sha"
 printf 'Device: %s\n' "$serial"
 
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/plyvanta-apk-smoke.XXXXXX")
@@ -193,6 +290,15 @@ installed_version_code=$(printf '%s\n' "$installed_dump" |
     fail "Installed versionName is '$installed_version_name'; expected '$version_name'."
 [[ "$installed_version_code" == "$version_code" ]] ||
     fail "Installed versionCode is '$installed_version_code'; expected '$version_code'."
+
+device_sdk=$("$adb_bin" -s "$serial" shell getprop ro.build.version.sdk | tr -d '\r')
+[[ "$device_sdk" =~ ^[1-9][0-9]*$ ]] ||
+    fail "Device reported an invalid API level: '$device_sdk'."
+if [[ "$device_sdk" -ge 33 ]]; then
+    "$adb_bin" -s "$serial" shell pm grant \
+        "$package_name" android.permission.POST_NOTIFICATIONS ||
+        fail "Could not grant the notification permission for the UI smoke test."
+fi
 
 dump_ui() {
     "$adb_bin" -s "$serial" shell uiautomator dump "$device_xml" >/dev/null 2>&1 &&

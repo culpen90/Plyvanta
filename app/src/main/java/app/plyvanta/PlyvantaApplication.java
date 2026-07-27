@@ -9,6 +9,8 @@ import org.schabi.newpipe.extractor.localization.Localization;
 import java.util.Locale;
 
 import app.plyvanta.extractor.OkHttpDownloader;
+import app.plyvanta.update.UpdateNotificationManager;
+import app.plyvanta.update.UpdateScheduler;
 
 public final class PlyvantaApplication extends Application {
     @Override
@@ -22,5 +24,8 @@ public final class PlyvantaApplication extends Application {
                 ? ContentCountry.DEFAULT
                 : new ContentCountry(country);
         NewPipe.init(new OkHttpDownloader(), localization, contentCountry);
+
+        UpdateNotificationManager.createChannel(this);
+        UpdateScheduler.schedule(this);
     }
 }

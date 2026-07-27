@@ -2,7 +2,7 @@
 
 This file records the third-party software included in the Plyvanta Android
 runtime. Versions match the resolved `debugRuntimeClasspath` used for the
-`v1.0.0-debug.1` prerelease on 2026-07-26.
+`v1.0.0-debug.4` prerelease build on 2026-07-26.
 
 Applicable license texts, notices, and required license URIs are provided in
 `LICENSE` and `licenses/`. The same files are embedded in the APK under
@@ -27,7 +27,7 @@ Plyvanta uses NewPipe Extractor without source modification.
 - Project and source: https://github.com/google/desugar_jdk_libs
 - License: GNU General Public License, version 2, with the Classpath Exception
 - License text:
-  `licenses/GPL-2.0-with-Classpath-Exception.txt`
+  `licenses/GPL-2.0-with-Classpath-Exception.txt/////`
 - Additional upstream licensing information:
   `licenses/desugar_jdk_libs-ADDITIONAL_LICENSE_INFO.txt`
 - OpenJDK assembly exception:
@@ -124,8 +124,10 @@ License 2.0. The complete text is in `licenses/Apache-2.0.txt`.
   1.4.2, Compose Runtime Annotation 1.9.0, Concurrent Futures 1.1.0, Core
   1.18.0, CustomView 1.0.0, ExifInterface 1.3.6, Interpolator 1.0.0,
   Lifecycle 2.6.2, NavigationEvent 1.0.0, ProfileInstaller 1.4.0,
-  RecyclerView 1.3.0, SavedState 1.2.1, Startup 1.2.0, Tracing 1.2.0, and
-  VersionedParcelable 1.1.1.
+  RecyclerView 1.3.0, Room 2.7.0, SavedState 1.2.1, SQLite 2.5.0,
+  Startup 1.2.0, Tracing 1.2.0, VersionedParcelable 1.1.1, and WorkManager
+  2.11.2. This inventory includes their resolved Android, JVM, KTX, common,
+  framework, service, and view-tree artifacts.
 - AndroidX Media3 1.10.1: Common, Container, Database, DataSource, Decoder,
   ExoPlayer, DASH, HLS, Extractor, and UI.
 - Kotlin standard library 2.2.21 and JetBrains annotations 23.0.0. See the
