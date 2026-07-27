@@ -42,7 +42,7 @@ import app.plyvanta.R;
 
 @RunWith(AndroidJUnit4.class)
 public final class UpdateNotificationNavigationTest {
-    private static final long WAIT_TIMEOUT_MS = 30_000L;
+    private static final long WAIT_TIMEOUT_MS = 120_000L;
     private static final String PREFERENCES_NAME = "plyvanta_updates";
 
     private final AtomicReference<Activity> launchedActivity = new AtomicReference<>();

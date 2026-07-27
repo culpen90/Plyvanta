@@ -27,7 +27,7 @@ Plyvanta uses NewPipe Extractor without source modification.
 - Project and source: https://github.com/google/desugar_jdk_libs
 - License: GNU General Public License, version 2, with the Classpath Exception
 - License text:
-  `licenses/GPL-2.0-with-Classpath-Exception.txt/////`
+  `licenses/GPL-2.0-with-Classpath-Exception.txt`
 - Additional upstream licensing information:
   `licenses/desugar_jdk_libs-ADDITIONAL_LICENSE_INFO.txt`
 - OpenJDK assembly exception:
