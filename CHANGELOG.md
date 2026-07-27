@@ -1,5 +1,8 @@
 # Changelog
 
+Releases after 1.0.0 are versioned from Conventional Commits and documented in
+their immutable GitHub Release notes.
+
 ## 1.0.0 - 2026-07-26
 
 First stable release of Plyvanta, built from the functionality validated in

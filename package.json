@@ -1,0 +1,22 @@
+{
+  "name": "plyvanta-release-automation",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/culpen90/Plyvanta.git"
+  },
+  "engines": {
+    "node": ">=24.10.0 <25"
+  },
+  "scripts": {
+    "audit:release": "node scripts/audit-release-tooling.cjs",
+    "release": "semantic-release",
+    "test:release": "node --test scripts/semantic-release-config.test.cjs"
+  },
+  "devDependencies": {
+    "@semantic-release/exec": "7.1.0",
+    "conventional-changelog-conventionalcommits": "10.2.1",
+    "semantic-release": "25.0.8"
+  }
+}

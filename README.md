@@ -167,6 +167,21 @@ scripts/smoke-test-apk.sh \
   2085e2b0c5bbd6273203f2aa0064b0f6f291a43746f9989dd0cea30e6cec4d8e
 ```
 
+## Automated releases
+
+Plyvanta uses Semantic Release on `main`. Conventional `fix:`, `perf:`, and
+`revert:` commits publish a patch, `feat:` publishes a minor release, and
+breaking changes publish a major release. Documentation, tests, maintenance,
+and CI commits do not publish by themselves.
+
+Every automated release runs the Android test, lint, shrink, production-signing,
+metadata, checksum, package-integrity, and GitHub attestation checks. It creates
+an immutable `vX.Y.Z` GitHub Release containing the versioned APK, matching
+update metadata, and `SHA256SUMS`. The bot does not publish debug previews.
+
+See [the automated release guide](docs/RELEASING.md) for the signing-environment
+setup, exact version rules, local validation, and failure recovery.
+
 ## Architecture
 
 Plyvanta is a single-activity Java Android app:
