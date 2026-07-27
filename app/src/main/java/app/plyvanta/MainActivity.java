@@ -1,5 +1,6 @@
 package app.plyvanta;
 
+import android.Manifest;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -19,6 +20,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.text.method.LinkMovementMethod;
@@ -76,6 +78,10 @@ import app.plyvanta.settings.PreferenceStore;
 import app.plyvanta.sponsor.SponsorBlockClient;
 import app.plyvanta.sponsor.SponsorSegment;
 import app.plyvanta.support.DiagnosticReport;
+import app.plyvanta.update.UpdateNotificationManager;
+import app.plyvanta.update.UpdatePreferences;
+import app.plyvanta.update.UpdateRelease;
+import app.plyvanta.update.UpdateScheduler;
 import app.plyvanta.util.YouTubeUrlParser;
 
 @UnstableApi
@@ -98,6 +104,7 @@ public final class MainActivity extends ComponentActivity {
     private static final int BUG_REPORT_CLOSED = 0;
     private static final int BUG_REPORT_EDITING = 1;
     private static final int BUG_REPORT_REVIEWING = 2;
+    private static final int REQUEST_UPDATE_NOTIFICATIONS = 1001;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService resolverExecutor = Executors.newSingleThreadExecutor();
@@ -126,6 +133,7 @@ public final class MainActivity extends ComponentActivity {
     private SponsorSkipController skipController;
     private SponsorBlockClient sponsorBlockClient;
     private PreferenceStore preferenceStore;
+    private UpdatePreferences updatePreferences;
     private final NewPipeVideoResolver videoResolver = new NewPipeVideoResolver();
 
     private ResolvedVideo activeVideo;
@@ -152,6 +160,7 @@ public final class MainActivity extends ComponentActivity {
     private ViewGroup originalPlayerParent;
     private int originalPlayerIndex;
     private ViewGroup.LayoutParams originalPlayerLayoutParams;
+    private boolean updateNotificationsWereAllowed;
 
     private final Runnable hideSkipNotice = () -> {
         if (skipNotice != null) {
@@ -169,12 +178,16 @@ public final class MainActivity extends ComponentActivity {
         configureWindow();
 
         preferenceStore = new PreferenceStore(this);
+        updatePreferences = new UpdatePreferences(this);
+        updateNotificationsWereAllowed =
+                UpdateNotificationManager.notificationsAllowed(this);
         sponsorBlockClient = new SponsorBlockClient();
         buildPlayer();
         setContentView(buildUi());
         applySystemInsets();
         configureBackNavigation();
 
+        boolean handledUpdateIntent = handleUpdateIntent(getIntent());
         if (savedInstanceState != null) {
             activeUrl = savedInstanceState.getString(STATE_URL);
             pendingSeekMs = savedInstanceState.getLong(STATE_POSITION, C.TIME_UNSET);
@@ -186,10 +199,11 @@ public final class MainActivity extends ComponentActivity {
                 linkInput.setText(activeUrl);
                 startPlayback(activeUrl, false);
             }
-        } else if (!handleIntent(getIntent())) {
+        } else if (!handledUpdateIntent && !handleIntent(getIntent())) {
             updateProtectionText();
         }
         restoreBugReport(savedInstanceState);
+        mainHandler.post(() -> maybeExplainUpdateNotifications(getIntent()));
     }
 
     private void configureBackNavigation() {
@@ -721,6 +735,43 @@ public final class MainActivity extends ComponentActivity {
         version.setPadding(0, 0, 0, dp(8));
         content.addView(version);
 
+        TextView updatesLabel = text(
+                getString(R.string.updates),
+                11,
+                getColor(R.color.text_secondary)
+        );
+        updatesLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        updatesLabel.setPadding(0, dp(16), 0, dp(3));
+        content.addView(updatesLabel);
+
+        Button manageNotifications = textButton(getString(R.string.manage));
+        View notificationSettingsRow = settingAction(
+                getString(R.string.update_notifications),
+                getString(
+                        UpdateNotificationManager.notificationsAllowed(this)
+                                ? R.string.update_notifications_allowed
+                                : R.string.update_notifications_off
+                ),
+                manageNotifications
+        );
+        content.addView(notificationSettingsRow);
+
+        UpdateRelease availableUpdate = availableUpdate();
+        Button downloadUpdate = null;
+        View availableUpdateRow = null;
+        if (availableUpdate != null) {
+            downloadUpdate = textButton(getString(R.string.download));
+            availableUpdateRow = settingAction(
+                    getString(R.string.update_available),
+                    getString(
+                            R.string.update_available_detail,
+                            availableUpdate.getVersionName()
+                    ),
+                    downloadUpdate
+            );
+            content.addView(availableUpdateRow);
+        }
+
         TextView section = text("SKIP CATEGORIES", 11, getColor(R.color.text_secondary));
         section.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         section.setPadding(0, dp(20), 0, 0);
@@ -806,6 +857,19 @@ public final class MainActivity extends ComponentActivity {
         };
         reportBug.setOnClickListener(openBugReport);
         reportBugRow.setOnClickListener(openBugReport);
+        View.OnClickListener manageUpdateNotifications =
+                view -> openUpdateNotificationSettings();
+        manageNotifications.setOnClickListener(manageUpdateNotifications);
+        notificationSettingsRow.setOnClickListener(manageUpdateNotifications);
+        if (availableUpdate != null) {
+            UpdateRelease offeredRelease = availableUpdate;
+            View.OnClickListener openAvailableUpdate = view -> {
+                dialog.dismiss();
+                showUpdateDialog(offeredRelease);
+            };
+            downloadUpdate.setOnClickListener(openAvailableUpdate);
+            availableUpdateRow.setOnClickListener(openAvailableUpdate);
+        }
         dialog.setOnDismissListener(ignored -> refreshSponsorPreferences());
         dialog.setOnShowListener(ignored -> {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE)
@@ -1394,6 +1458,174 @@ public final class MainActivity extends ComponentActivity {
         }
     }
 
+    private boolean handleUpdateIntent(Intent intent) {
+        if (intent == null
+                || !UpdateNotificationManager.ACTION_SHOW_UPDATE.equals(intent.getAction())) {
+            return false;
+        }
+        if (!UpdateNotificationManager.isTrustedTapIntent(this, intent)) {
+            return false;
+        }
+        // MainActivity is exported for YouTube links. The private token authenticates this
+        // navigation request, and the download URL is still read only from private state.
+        intent.setAction(null);
+        mainHandler.post(this::showAvailableUpdate);
+        return true;
+    }
+
+    private void showAvailableUpdate() {
+        UpdateRelease release = availableUpdate();
+        if (release != null) {
+            showUpdateDialog(release);
+        }
+    }
+
+    private void showUpdateDialog(UpdateRelease requestedRelease) {
+        UpdateRelease release = availableUpdate();
+        if (release == null || !release.equals(requestedRelease)) {
+            return;
+        }
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(getString(
+                        R.string.update_dialog_title,
+                        release.getVersionName()
+                ))
+                .setMessage(R.string.update_dialog_message)
+                .setNegativeButton(R.string.later, null)
+                .setPositiveButton(
+                        R.string.download_update,
+                        (ignoredDialog, ignoredWhich) ->
+                                confirmAndOpenUpdateDownload(release)
+                )
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    .setTextColor(getColor(R.color.coral));
+        });
+        dialog.show();
+    }
+
+    private void confirmAndOpenUpdateDownload(UpdateRelease displayedRelease) {
+        UpdateRelease currentRelease = availableUpdate();
+        if (currentRelease == null) {
+            return;
+        }
+        if (!currentRelease.equals(displayedRelease)) {
+            mainHandler.post(() -> showUpdateDialog(currentRelease));
+            return;
+        }
+        openUpdateDownload(currentRelease);
+    }
+
+    private void openUpdateDownload(UpdateRelease release) {
+        if (openExternalUrl(release.getApkUrl())) {
+            return;
+        }
+        if (!openExternalUrl(release.getReleaseUrl())) {
+            Toast.makeText(this, R.string.no_app_for_update, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private boolean openExternalUrl(String url) {
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.addCategory(Intent.CATEGORY_BROWSABLE);
+        try {
+            startActivity(intent);
+            return true;
+        } catch (ActivityNotFoundException noHandler) {
+            return false;
+        }
+    }
+
+    private UpdateRelease availableUpdate() {
+        UpdateRelease release = updatePreferences.availableRelease();
+        if (release != null && !release.isNewerThan(installedVersionCode())) {
+            updatePreferences.clearAvailableRelease();
+            UpdateNotificationManager.cancel(this);
+            return null;
+        }
+        return release;
+    }
+
+    private long installedVersionCode() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? info.getLongVersionCode()
+                    : info.versionCode;
+        } catch (PackageManager.NameNotFoundException missingOwnPackage) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    private void maybeExplainUpdateNotifications(Intent launchIntent) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || launchIntent == null
+                || !Intent.ACTION_MAIN.equals(launchIntent.getAction())
+                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED
+                || updatePreferences.permissionExplanationShown()
+                || isFinishing()
+                || isDestroyed()) {
+            return;
+        }
+
+        updatePreferences.markPermissionExplanationShown();
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.update_permission_title)
+                .setMessage(R.string.update_permission_message)
+                .setNegativeButton(R.string.not_now, null)
+                .setPositiveButton(R.string.allow, (ignoredDialog, ignoredWhich) -> {
+                    updatePreferences.markPermissionRequestAttempted();
+                    requestPermissions(
+                            new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                            REQUEST_UPDATE_NOTIFICATIONS
+                    );
+                })
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    .setTextColor(getColor(R.color.coral));
+        });
+        dialog.show();
+    }
+
+    private void openUpdateNotificationSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+                && !updatePreferences.permissionRequestAttempted()) {
+            updatePreferences.markPermissionRequestAttempted();
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    REQUEST_UPDATE_NOTIFICATIONS
+            );
+            return;
+        }
+
+        Intent intent;
+        if (UpdateNotificationManager.notificationsAllowed(this)) {
+            intent = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())
+                    .putExtra(
+                            Settings.EXTRA_CHANNEL_ID,
+                            UpdateNotificationManager.CHANNEL_ID
+                    );
+        } else {
+            intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+        }
+        try {
+            startActivity(intent);
+        } catch (ActivityNotFoundException noNotificationSettings) {
+            Intent fallback = new Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())
+            );
+            startActivity(fallback);
+        }
+    }
+
     private boolean handleIntent(Intent intent) {
         if (intent == null) {
             return false;
@@ -1417,7 +1649,42 @@ public final class MainActivity extends ComponentActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        handleIntent(intent);
+        if (!handleUpdateIntent(intent)) {
+            handleIntent(intent);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode,
+            String[] permissions,
+            int[] grantResults
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQUEST_UPDATE_NOTIFICATIONS) {
+            return;
+        }
+        if (grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            UpdateScheduler.checkNow(this);
+        } else {
+            Toast.makeText(
+                    this,
+                    R.string.update_notifications_denied,
+                    Toast.LENGTH_LONG
+            ).show();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        boolean notificationsAllowed =
+                UpdateNotificationManager.notificationsAllowed(this);
+        if (notificationsAllowed && !updateNotificationsWereAllowed) {
+            UpdateScheduler.checkNow(this);
+        }
+        updateNotificationsWereAllowed = notificationsAllowed;
     }
 
     @Override

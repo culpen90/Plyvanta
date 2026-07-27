@@ -17,6 +17,14 @@ prerelease APK is debug-signed for testing and is not a production signing
 artifact. A future production-signed build may require uninstalling the preview
 before installation.
 
+Plyvanta checks the public GitHub Releases feed about every six hours while a
+network is available. When a compatible newer version is published, it posts one
+Android notification for that version. Tapping the notification opens Plyvanta's
+update prompt; **Download update** then opens the exact official GitHub APK.
+Android can delay periodic background work, so this is an update alert rather
+than an instantaneous server push. Android 13 and later also require the user to
+allow notifications.
+
 ## What it does
 
 - Accepts a YouTube URL pasted into the app.
@@ -75,16 +83,18 @@ run the equivalent wrapper command (`gradlew.bat` on Windows). The Android SDK
 must contain Platform 36; Android Studio can install it through **SDK Manager**.
 
 The preview packaging task writes a versioned APK so downloads from different
-previews cannot be confused:
+previews cannot be confused. It also writes the release metadata that future
+installed versions require before trusting an update:
 
 ```text
-app/build/outputs/preview/Plyvanta-1.0.0-debug.3.apk
+app/build/outputs/preview/Plyvanta-1.0.0-debug.4.apk
+app/build/outputs/preview/Plyvanta-1.0.0-debug.4-update.json
 ```
 
 Install it on a connected device or emulator with:
 
 ```sh
-adb install -r app/build/outputs/preview/Plyvanta-1.0.0-debug.3.apk
+adb install -r app/build/outputs/preview/Plyvanta-1.0.0-debug.4.apk
 ```
 
 With one emulator or device connected, verify the exact packaged artifact before
@@ -92,12 +102,34 @@ distribution:
 
 ```sh
 scripts/smoke-test-apk.sh \
-  app/build/outputs/preview/Plyvanta-1.0.0-debug.3.apk \
-  1.0.0-debug.3 \
-  3 \
-  app.plyvanta.debug \
-  846f202248f014ea832c30055158f8e3cbc162032af6a96de912667d013c5a61
+  app/build/outputs/preview/Plyvanta-1.0.0-debug.4.apk \
+  app/build/outputs/preview/Plyvanta-1.0.0-debug.4-update.json \
+  f316b684e87b4df6deb4c9fc987e530e7c3fae9810e6a3371b0cc0ea05f179f1
 ```
+
+The API 36 device test posts the real update notification, follows its content
+intent into a cold and already-running activity, and verifies the trusted APK
+download intent:
+
+```sh
+./gradlew connectedDebugAndroidTest
+```
+
+**Immutable releases** are enabled for this repository and must remain enabled.
+Publish the APK and its matching `-update.json` file as assets on the same
+immutable GitHub prerelease tagged
+`v1.0.0-debug.4`. The updater ignores mutable releases and releases without
+metadata. It rejects metadata unless its package, preview/stable channel,
+monotonic Android `versionCode`, tag, minimum SDK, APK filename, trusted GitHub
+URL, and SHA-256 all agree with the immutable published GitHub asset. Future
+releases must increment `versionCode` and include both generated files before
+the release is published.
+
+The current production task still creates an unsigned `app.plyvanta` APK. A
+future stable publishing pipeline must sign its final APK first, generate the
+same metadata schema for package `app.plyvanta` and channel `stable`, and
+publish both files on an immutable, non-prerelease GitHub release. Until that
+signing pipeline exists, stable builds cannot be offered as in-place updates.
 
 For an optimized release build:
 
@@ -131,6 +163,12 @@ Plyvanta is a single-activity Java Android app:
   enabled ranges while supporting an undo grace period.
 - `PreferenceStore` keeps skip-category and maximum-quality settings in Android
   local preferences.
+- `GitHubReleaseClient` reads bounded, anonymous release metadata from the
+  official repository and accepts only a compatible APK from an immutable
+  release with matching metadata and GitHub SHA-256.
+- `UpdateScheduler` creates unique, network-constrained periodic and immediate
+  WorkManager requests. `UpdateCheckWorker` serializes checks, deduplicates
+  alerts by Android version code, and posts the app-update notification.
 - `DiagnosticReport` builds a bounded, text-only report from an explicit
   allowlist and defensively redacts links, credentials, email addresses, and
   local paths from technical values.
@@ -141,11 +179,16 @@ and skipping all happen on the device.
 ## Privacy
 
 Plyvanta has no user accounts, sign-in flow, analytics, advertising identifier,
-or viewing-history database. It stores only the selected skip categories and
-maximum video quality in local Android preferences. A currently playing URL and
-position may be retained temporarily by Android to restore the activity after a
-configuration or process-state change; they are not presented as history.
-Android backup is disabled for Plyvanta's app data.
+or viewing-history database. It stores the selected skip categories, maximum
+video quality, whether the update-notification explanation or permission request
+has been shown, the last version that produced an alert, a random private token
+used only to authenticate notification navigation, and the validated metadata
+for a currently available update in local Android preferences. WorkManager also
+keeps its scheduling state in the app's private database. A currently playing
+URL and position may be retained temporarily by Android to restore the activity
+after a configuration or process-state change; they are not presented as
+history. Android cloud backup and device-to-device transfer are disabled for
+Plyvanta's app data.
 
 Bug reports are entirely user-initiated. Plyvanta creates the report locally and
 shows its full text before handing anything to another app or website. Technical
@@ -187,6 +230,12 @@ Playing a link makes these network requests:
   using any segment. Enabled category names are also included in the request. No
   SponsorBlock request is made when every skip category is disabled.
 
+Separately, WorkManager periodically makes an anonymous, read-only request to
+the public **GitHub Releases API** for `culpen90/Plyvanta`. When a release
+contains the required update metadata, Plyvanta downloads that small metadata
+file from GitHub and validates it locally. The request uses no GitHub account,
+token, device identifier, app usage, video link, or viewing history.
+
 Plyvanta does not proxy these requests, upload an account, or send a local
 viewing history to its own service. Network operators and the services contacted
 can still observe requests according to their own privacy practices.
@@ -206,6 +255,11 @@ can still observe requests according to their own privacy practices.
   segments, incomplete segments, or inaccurate timing.
 - Direct media URLs expire. Plyvanta retries a failed stream once, but a link may
   still need to be opened again.
+- Update notifications are periodic rather than real-time and can be delayed by
+  Android battery, network, app-standby, notification-permission, or force-stop
+  behavior.
+- Debug previews follow only compatible `app.plyvanta.debug` prereleases.
+  A future production-signed `app.plyvanta` release is a separate update channel.
 - Availability and use of YouTube content remain subject to applicable law and
   the service's terms.
 

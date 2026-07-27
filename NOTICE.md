@@ -46,6 +46,15 @@ modules:
 - License: Apache License 2.0
 - License text: https://www.apache.org/licenses/LICENSE-2.0
 
+## AndroidX WorkManager
+
+Plyvanta uses AndroidX WorkManager for deferrable app-update checks:
+
+- Project and source: https://github.com/androidx/androidx/tree/androidx-main/work
+- Copyright: The Android Open Source Project
+- License: Apache License 2.0
+- License text: `licenses/Apache-2.0.txt`
+
 ## OkHttp
 
 Plyvanta uses OkHttp and Okio:
