@@ -20,13 +20,16 @@ Debug previews use the separate package `app.plyvanta.debug`. The stable app is
 of updating it in place. Preview settings do not transfer automatically; the
 preview can be removed after the stable app is installed and checked.
 
-Plyvanta checks the public GitHub Releases feed about every six hours while a
-network is available. When a compatible newer version is published, it posts one
-Android notification for that version. Tapping the notification opens Plyvanta's
+Open **Settings → Check for updates now** to run an immediate compatible-release
+check. Settings shows inline checking, up-to-date, or error status and opens the
+existing update prompt when a compatible newer version is found. Independently,
+Plyvanta continues to check the public GitHub Releases feed about every six hours
+while a network is available. A periodic check posts one Android notification
+for each compatible newer version. Tapping the notification opens Plyvanta's
 update prompt; **Download update** then opens the exact official GitHub APK.
-Android can delay periodic background work, so this is an update alert rather
-than an instantaneous server push. Android 13 and later also require the user to
-allow notifications.
+Android can delay periodic background work, so notifications are update alerts
+rather than instantaneous server pushes. Android 13 and later also require the
+user to allow notifications.
 
 ## What it does
 
@@ -90,14 +93,14 @@ previews cannot be confused. It also writes the release metadata that future
 installed versions require before trusting an update:
 
 ```text
-app/build/outputs/preview/Plyvanta-1.0.0-debug.4.apk
-app/build/outputs/preview/Plyvanta-1.0.0-debug.4-update.json
+app/build/outputs/preview/Plyvanta-1.1.0-debug.4.apk
+app/build/outputs/preview/Plyvanta-1.1.0-debug.4-update.json
 ```
 
 Install it on a connected device or emulator with:
 
 ```sh
-adb install -r app/build/outputs/preview/Plyvanta-1.0.0-debug.4.apk
+adb install -r app/build/outputs/preview/Plyvanta-1.1.0-debug.4.apk
 ```
 
 With one emulator or device connected, verify the exact packaged artifact before
@@ -105,8 +108,8 @@ distribution:
 
 ```sh
 scripts/smoke-test-apk.sh \
-  app/build/outputs/preview/Plyvanta-1.0.0-debug.4.apk \
-  app/build/outputs/preview/Plyvanta-1.0.0-debug.4-update.json \
+  app/build/outputs/preview/Plyvanta-1.1.0-debug.4.apk \
+  app/build/outputs/preview/Plyvanta-1.1.0-debug.4-update.json \
   f316b684e87b4df6deb4c9fc987e530e7c3fae9810e6a3371b0cc0ea05f179f1
 ```
 
@@ -153,8 +156,8 @@ The task refuses a partially configured signing identity and writes the three
 upload-ready assets to:
 
 ```text
-app/build/outputs/stable/Plyvanta-1.0.0.apk
-app/build/outputs/stable/Plyvanta-1.0.0-update.json
+app/build/outputs/stable/Plyvanta-1.1.0.apk
+app/build/outputs/stable/Plyvanta-1.1.0-update.json
 app/build/outputs/stable/SHA256SUMS
 ```
 
@@ -162,8 +165,8 @@ Before distribution, install and exercise the exact packaged artifact:
 
 ```sh
 scripts/smoke-test-apk.sh \
-  app/build/outputs/stable/Plyvanta-1.0.0.apk \
-  app/build/outputs/stable/Plyvanta-1.0.0-update.json \
+  app/build/outputs/stable/Plyvanta-1.1.0.apk \
+  app/build/outputs/stable/Plyvanta-1.1.0-update.json \
   2085e2b0c5bbd6273203f2aa0064b0f6f291a43746f9989dd0cea30e6cec4d8e
 ```
 
@@ -206,9 +209,12 @@ Plyvanta is a single-activity Java Android app:
 - `GitHubReleaseClient` reads bounded, anonymous release metadata from the
   official repository and accepts only a compatible APK from an immutable
   release with matching metadata and GitHub SHA-256.
+- `UpdateChecker` serializes the validated release fetch-and-store operation
+  shared by Settings and `UpdateCheckWorker`.
 - `UpdateScheduler` creates unique, network-constrained periodic and immediate
-  WorkManager requests. `UpdateCheckWorker` serializes checks, deduplicates
-  alerts by Android version code, and posts the app-update notification.
+  WorkManager requests. `UpdateCheckWorker` retains notification deduplication
+  by Android version code and posts the app-update notification after the shared
+  check finds a compatible release.
 - `DiagnosticReport` builds a bounded, text-only report from an explicit
   allowlist and defensively redacts links, credentials, email addresses, and
   local paths from technical values.
@@ -271,10 +277,12 @@ Playing a link makes these network requests:
   SponsorBlock request is made when every skip category is disabled.
 
 Separately, WorkManager periodically makes an anonymous, read-only request to
-the public **GitHub Releases API** for `culpen90/Plyvanta`. When a release
-contains the required update metadata, Plyvanta downloads that small metadata
-file from GitHub and validates it locally. The request uses no GitHub account,
-token, device identifier, app usage, video link, or viewing history.
+the public **GitHub Releases API** for `culpen90/Plyvanta`. Choosing
+**Settings → Check for updates now** explicitly initiates the same anonymous
+GitHub requests. When a release contains the required update metadata, Plyvanta
+downloads that small metadata file from GitHub and validates it locally. The
+requests use no GitHub account, token, device identifier, app usage, video link,
+or viewing history.
 
 Plyvanta does not proxy these requests, upload an account, or send a local
 viewing history to its own service. Network operators and the services contacted

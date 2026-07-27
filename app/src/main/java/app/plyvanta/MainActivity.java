@@ -78,6 +78,7 @@ import app.plyvanta.settings.PreferenceStore;
 import app.plyvanta.sponsor.SponsorBlockClient;
 import app.plyvanta.sponsor.SponsorSegment;
 import app.plyvanta.support.DiagnosticReport;
+import app.plyvanta.update.UpdateChecker;
 import app.plyvanta.update.UpdateNotificationManager;
 import app.plyvanta.update.UpdatePreferences;
 import app.plyvanta.update.UpdateRelease;
@@ -108,7 +109,10 @@ public final class MainActivity extends ComponentActivity {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService resolverExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService updateCheckExecutor = Executors.newSingleThreadExecutor();
     private final AtomicInteger loadGeneration = new AtomicInteger();
+    private final ManualUpdateCheckController manualUpdateCheckController =
+            new ManualUpdateCheckController();
 
     private FrameLayout root;
     private LinearLayout appContent;
@@ -161,6 +165,10 @@ public final class MainActivity extends ComponentActivity {
     private int originalPlayerIndex;
     private ViewGroup.LayoutParams originalPlayerLayoutParams;
     private boolean updateNotificationsWereAllowed;
+    private AlertDialog activeSettingsDialog;
+    private TextView activeUpdateCheckDetail;
+    private Button activeUpdateCheckAction;
+    private volatile boolean destroyed;
 
     private final Runnable hideSkipNotice = () -> {
         if (skipNotice != null) {
@@ -756,6 +764,19 @@ public final class MainActivity extends ComponentActivity {
         );
         content.addView(notificationSettingsRow);
 
+        TextView updateCheckDetail = text(
+                getString(R.string.check_for_updates_detail),
+                12,
+                getColor(R.color.text_secondary)
+        );
+        Button checkForUpdates = textButton(getString(R.string.check_now));
+        View checkForUpdatesRow = settingAction(
+                getString(R.string.check_for_updates_now),
+                updateCheckDetail,
+                checkForUpdates
+        );
+        content.addView(checkForUpdatesRow);
+
         UpdateRelease availableUpdate = availableUpdate();
         Button downloadUpdate = null;
         View availableUpdateRow = null;
@@ -851,6 +872,10 @@ public final class MainActivity extends ComponentActivity {
                 .setView(scroll)
                 .setPositiveButton("Done", null)
                 .create();
+        activeSettingsDialog = dialog;
+        activeUpdateCheckDetail = updateCheckDetail;
+        activeUpdateCheckAction = checkForUpdates;
+        renderManualUpdateCheckState();
         View.OnClickListener openBugReport = view -> {
             dialog.dismiss();
             showBugReport(false, "", false, false);
@@ -861,6 +886,9 @@ public final class MainActivity extends ComponentActivity {
                 view -> openUpdateNotificationSettings();
         manageNotifications.setOnClickListener(manageUpdateNotifications);
         notificationSettingsRow.setOnClickListener(manageUpdateNotifications);
+        View.OnClickListener runUpdateCheck = view -> startManualUpdateCheck();
+        checkForUpdates.setOnClickListener(runUpdateCheck);
+        checkForUpdatesRow.setOnClickListener(runUpdateCheck);
         if (availableUpdate != null) {
             UpdateRelease offeredRelease = availableUpdate;
             View.OnClickListener openAvailableUpdate = view -> {
@@ -870,12 +898,104 @@ public final class MainActivity extends ComponentActivity {
             downloadUpdate.setOnClickListener(openAvailableUpdate);
             availableUpdateRow.setOnClickListener(openAvailableUpdate);
         }
-        dialog.setOnDismissListener(ignored -> refreshSponsorPreferences());
+        dialog.setOnDismissListener(ignored -> {
+            if (activeSettingsDialog == dialog) {
+                activeSettingsDialog = null;
+                activeUpdateCheckDetail = null;
+                activeUpdateCheckAction = null;
+            }
+            refreshSponsorPreferences();
+        });
         dialog.setOnShowListener(ignored -> {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                     .setTextColor(getColor(R.color.coral));
         });
         dialog.show();
+    }
+
+    private void startManualUpdateCheck() {
+        if (destroyed || !manualUpdateCheckController.start()) {
+            return;
+        }
+        renderManualUpdateCheckState();
+        Context applicationContext = getApplicationContext();
+        updateCheckExecutor.execute(() -> {
+            UpdateChecker.Result result;
+            try {
+                result = new UpdateChecker(applicationContext).check();
+            } catch (RuntimeException unexpectedFailure) {
+                result = null;
+            }
+            UpdateChecker.Result completedResult = result;
+            mainHandler.post(() -> finishManualUpdateCheck(completedResult));
+        });
+    }
+
+    private void finishManualUpdateCheck(UpdateChecker.Result result) {
+        if (destroyed || isFinishing() || isDestroyed()) {
+            return;
+        }
+        UpdateChecker.Status status = result == null ? null : result.getStatus();
+        boolean updateAvailable =
+                result != null && result.getAvailableRelease() != null;
+        ManualUpdateCheckController.Completion completion =
+                manualUpdateCheckController.complete(status, updateAvailable);
+        if (completion == ManualUpdateCheckController.Completion.SHOW_UPDATE) {
+            AlertDialog settingsDialog = activeSettingsDialog;
+            if (settingsDialog != null && settingsDialog.isShowing()) {
+                settingsDialog.dismiss();
+            }
+            showAvailableUpdate();
+            return;
+        }
+
+        boolean upToDate = manualUpdateCheckController.getState()
+                == ManualUpdateCheckController.State.UP_TO_DATE;
+        boolean settingsVisible =
+                activeSettingsDialog != null && activeSettingsDialog.isShowing();
+        renderManualUpdateCheckState();
+        if (!settingsVisible) {
+            Toast.makeText(
+                    this,
+                    upToDate
+                            ? R.string.update_check_up_to_date
+                            : R.string.update_check_error,
+                    Toast.LENGTH_LONG
+            ).show();
+        }
+    }
+
+    private void renderManualUpdateCheckState() {
+        if (activeUpdateCheckDetail == null || activeUpdateCheckAction == null) {
+            return;
+        }
+        switch (manualUpdateCheckController.getState()) {
+            case CHECKING:
+                activeUpdateCheckDetail.setText(R.string.update_check_checking);
+                activeUpdateCheckDetail.setTextColor(getColor(R.color.text_secondary));
+                activeUpdateCheckAction.setText(R.string.checking);
+                activeUpdateCheckAction.setEnabled(false);
+                break;
+            case UP_TO_DATE:
+                activeUpdateCheckDetail.setText(R.string.update_check_up_to_date);
+                activeUpdateCheckDetail.setTextColor(getColor(R.color.mint));
+                activeUpdateCheckAction.setText(R.string.check_again);
+                activeUpdateCheckAction.setEnabled(true);
+                break;
+            case ERROR:
+                activeUpdateCheckDetail.setText(R.string.update_check_error);
+                activeUpdateCheckDetail.setTextColor(getColor(R.color.coral));
+                activeUpdateCheckAction.setText(R.string.try_again);
+                activeUpdateCheckAction.setEnabled(true);
+                break;
+            case IDLE:
+            default:
+                activeUpdateCheckDetail.setText(R.string.check_for_updates_detail);
+                activeUpdateCheckDetail.setTextColor(getColor(R.color.text_secondary));
+                activeUpdateCheckAction.setText(R.string.check_now);
+                activeUpdateCheckAction.setEnabled(true);
+                break;
+        }
     }
 
     private View settingSwitch(
@@ -909,6 +1029,11 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private View settingAction(String title, String detail, Button action) {
+        TextView detailView = text(detail, 12, getColor(R.color.text_secondary));
+        return settingAction(title, detailView, action);
+    }
+
+    private View settingAction(String title, TextView detailView, Button action) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -917,7 +1042,6 @@ public final class MainActivity extends ComponentActivity {
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         TextView titleView = text(title, 15, getColor(R.color.text_primary));
-        TextView detailView = text(detail, 12, getColor(R.color.text_secondary));
         copy.addView(titleView);
         copy.addView(detailView);
         row.addView(copy, new LinearLayout.LayoutParams(0, wrap(), 1f));
@@ -1482,7 +1606,11 @@ public final class MainActivity extends ComponentActivity {
 
     private void showUpdateDialog(UpdateRelease requestedRelease) {
         UpdateRelease release = availableUpdate();
-        if (release == null || !release.equals(requestedRelease)) {
+        if (release == null) {
+            return;
+        }
+        if (!release.equals(requestedRelease)) {
+            mainHandler.post(() -> showUpdateDialog(release));
             return;
         }
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -1704,8 +1832,13 @@ public final class MainActivity extends ComponentActivity {
 
     @Override
     protected void onDestroy() {
+        destroyed = true;
         mainHandler.removeCallbacksAndMessages(null);
         resolverExecutor.shutdownNow();
+        updateCheckExecutor.shutdownNow();
+        activeSettingsDialog = null;
+        activeUpdateCheckDetail = null;
+        activeUpdateCheckAction = null;
         playerView.setPlayer(null);
         player.release();
         super.onDestroy();
