@@ -1,9 +1,14 @@
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
+const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
 const repositoryRoot = path.resolve(__dirname, "..");
+const releaseWorkflow = readFileSync(
+  path.join(repositoryRoot, ".github", "workflows", "release.yml"),
+  "utf8",
+);
 const releaseConfig = require(path.join(repositoryRoot, "release.config.cjs"));
 const pluginEntries = new Map(
   releaseConfig.plugins.map((plugin) => (
@@ -70,6 +75,18 @@ test("release configuration keeps the guarded main-branch pipeline", () => {
     pluginEntries.get("@semantic-release/exec").prepareCmd,
     "./scripts/package-semantic-release.sh ${nextRelease.version}",
   );
+});
+
+test("Semantic Release receives the Actions token with Git transport credentials", () => {
+  const publishStep = releaseWorkflow.match(
+    /      - name: Build, sign, and publish the semantic release\n[\s\S]*?(?=\n      - name: Verify any release for this commit)/,
+  );
+  assert(publishStep, "Could not find the Semantic Release workflow step.");
+  assert.match(
+    publishStep[0],
+    /\n          GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/,
+  );
+  assert.doesNotMatch(publishStep[0], /\n          GH_TOKEN:/);
 });
 
 test("Conventional Commits map to the intended release levels", async () => {
