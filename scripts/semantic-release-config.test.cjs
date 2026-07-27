@@ -16,6 +16,9 @@ const pluginEntries = new Map(
   )),
 );
 const analyzerOptions = pluginEntries.get("@semantic-release/commit-analyzer");
+const notesOptions = pluginEntries.get(
+  "@semantic-release/release-notes-generator",
+);
 const versionCodeScript = path.join(
   repositoryRoot,
   "scripts",
@@ -36,6 +39,36 @@ async function releaseType(message) {
   );
 }
 
+async function releaseNotes(messages) {
+  const { generateNotes } = await import(
+    "@semantic-release/release-notes-generator"
+  );
+  const commits = messages.map((message, index) => ({
+    hash: `${index + 1}`.padStart(40, "0"),
+    message,
+  }));
+
+  return generateNotes(
+    notesOptions,
+    {
+      commits,
+      cwd: repositoryRoot,
+      lastRelease: {
+        gitHead: "0".repeat(40),
+        gitTag: "v1.0.0",
+      },
+      nextRelease: {
+        gitHead: commits.at(-1).hash,
+        gitTag: "v1.1.0",
+        version: "1.1.0",
+      },
+      options: {
+        repositoryUrl: "https://github.com/culpen90/Plyvanta.git",
+      },
+    },
+  );
+}
+
 test("release configuration keeps the guarded main-branch pipeline", () => {
   assert.deepEqual(releaseConfig.branches, ["main"]);
   assert.equal(releaseConfig.tagFormat, "v${version}");
@@ -51,9 +84,6 @@ test("release configuration keeps the guarded main-branch pipeline", () => {
     ],
   );
 
-  const notesOptions = pluginEntries.get(
-    "@semantic-release/release-notes-generator",
-  );
   assert.deepEqual(notesOptions, analyzerOptions);
 
   const githubOptions = pluginEntries.get("@semantic-release/github");
@@ -70,6 +100,14 @@ test("release configuration keeps the guarded main-branch pipeline", () => {
   assert.equal(githubOptions.failComment, false);
   assert.equal(githubOptions.releasedLabels, false);
   assert.equal(githubOptions.addReleases, false);
+  assert.match(
+    githubOptions.releaseBodyTemplate,
+    /<%= nextRelease\.notes %>/,
+  );
+  assert.ok(
+    githubOptions.releaseBodyTemplate.indexOf("<%= nextRelease.notes %>")
+      < githubOptions.releaseBodyTemplate.indexOf("### Release verification"),
+  );
 
   assert.equal(
     pluginEntries.get("@semantic-release/exec").prepareCmd,
@@ -120,6 +158,20 @@ test("non-product Conventional Commits do not publish releases", async () => {
   ]) {
     assert.equal(await releaseType(message), null, message);
   }
+});
+
+test("generated release notes explain each user-visible update", async () => {
+  const notes = await releaseNotes([
+    "feat(settings): add manual update check (#6)",
+    "fix(playback): recover a stalled stream",
+    "docs: clarify installation",
+  ]);
+
+  assert.match(notes, /### Features/);
+  assert.match(notes, /\*\*settings:\*\* add manual update check/);
+  assert.match(notes, /### Bug Fixes/);
+  assert.match(notes, /\*\*playback:\*\* recover a stalled stream/);
+  assert.doesNotMatch(notes, /clarify installation/);
 });
 
 test("semantic versions map to deterministic Android version codes", () => {
