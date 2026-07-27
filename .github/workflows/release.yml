@@ -113,7 +113,7 @@ jobs:
       - name: Build, sign, and publish the semantic release
         run: npm run release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PLYVANTA_RELEASE_STORE_BASE64: ${{ secrets.PLYVANTA_RELEASE_STORE_BASE64 }}
           PLYVANTA_RELEASE_STORE_PASSWORD: ${{ secrets.PLYVANTA_RELEASE_STORE_PASSWORD }}
           PLYVANTA_RELEASE_KEY_ALIAS: ${{ secrets.PLYVANTA_RELEASE_KEY_ALIAS }}
