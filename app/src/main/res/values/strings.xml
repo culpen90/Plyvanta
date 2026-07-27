@@ -27,6 +27,15 @@
     <string name="update_notifications_allowed">Allowed — checks GitHub periodically for compatible releases</string>
     <string name="update_notifications_off">Off in Android — tap Manage to allow update alerts</string>
     <string name="manage">Manage</string>
+    <string name="check_for_updates_now">Check for updates now</string>
+    <string name="check_for_updates_detail">Check GitHub for a compatible Plyvanta release</string>
+    <string name="check_now">Check</string>
+    <string name="update_check_checking">Checking GitHub for a compatible release…</string>
+    <string name="checking">Checking…</string>
+    <string name="update_check_up_to_date">Plyvanta is up to date.</string>
+    <string name="check_again">Check again</string>
+    <string name="update_check_error">Couldn’t check for updates. Check your connection and try again.</string>
+    <string name="try_again">Try again</string>
     <string name="update_available">Update available</string>
     <string name="update_available_detail">Version %1$s is ready to download from GitHub</string>
     <string name="download">Download</string>
