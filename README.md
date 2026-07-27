@@ -11,11 +11,14 @@ Playback must happen inside Plyvanta.
 
 ## Download
 
-Preview builds are available from
-[GitHub Releases](https://github.com/culpen90/Plyvanta/releases). The current
-prerelease APK is debug-signed for testing and is not a production signing
-artifact. A future production-signed build may require uninstalling the preview
-before installation.
+Production-signed stable builds are available from
+[GitHub Releases](https://github.com/culpen90/Plyvanta/releases). Download the
+APK from the latest non-prerelease release.
+
+Debug previews use the separate package `app.plyvanta.debug`. The stable app is
+`app.plyvanta`, so the first stable release installs alongside Preview 4 instead
+of updating it in place. Preview settings do not transfer automatically; the
+preview can be removed after the stable app is installed and checked.
 
 Plyvanta checks the public GitHub Releases feed about every six hours while a
 network is available. When a compatible newer version is published, it posts one
@@ -58,7 +61,7 @@ available SponsorBlock segments independently. When an enabled segment is
 reached, playback seeks to its end and briefly offers **Undo**.
 
 To report a problem, open **Settings → Report a bug**. The support action and
-installed app version appear at the top of Settings so the active preview can be
+installed app version appear at the top of Settings so the active build can be
 checked immediately. Playback errors also show **Report this issue** next to the
 error. Plyvanta previews the complete report before opening a public GitHub
 issue or the Android share sheet.
@@ -116,31 +119,53 @@ download intent:
 ```
 
 **Immutable releases** are enabled for this repository and must remain enabled.
-Publish the APK and its matching `-update.json` file as assets on the same
-immutable GitHub prerelease tagged
-`v1.0.0-debug.4`. The updater ignores mutable releases and releases without
-metadata. It rejects metadata unless its package, preview/stable channel,
-monotonic Android `versionCode`, tag, minimum SDK, APK filename, trusted GitHub
-URL, and SHA-256 all agree with the immutable published GitHub asset. Future
-releases must increment `versionCode` and include both generated files before
-the release is published.
+Each release must include its APK, matching `-update.json`, and `SHA256SUMS`
+from the same packaging run. The updater ignores mutable releases and releases
+without metadata. It rejects metadata unless its package, preview/stable
+channel, monotonic Android `versionCode`, tag, minimum SDK, APK filename,
+trusted GitHub URL, and SHA-256 all agree with the immutable published GitHub
+asset. Future releases must increment `versionCode` before publication.
 
-The current production task still creates an unsigned `app.plyvanta` APK. A
-future stable publishing pipeline must sign its final APK first, generate the
-same metadata schema for package `app.plyvanta` and channel `stable`, and
-publish both files on an immutable, non-prerelease GitHub release. Until that
-signing pipeline exists, stable builds cannot be offered as in-place updates.
-
-For an optimized release build:
+The stable packaging script runs a clean build, both unit-test variants, lint,
+release shrinking, production signing, metadata generation, and checksum
+generation:
 
 ```sh
-./gradlew assembleRelease
+scripts/package-stable-release.sh
 ```
 
-Release signing is not configured in this repository. The resulting unsigned APK
-is normally written to
-`app/build/outputs/apk/release/app-release-unsigned.apk` and must be signed before
-distribution.
+On the release Mac, the script reads the protected keystore from Application
+Support and its password from macOS Keychain. Other release environments must
+set all four variables below:
+
+```text
+PLYVANTA_RELEASE_STORE_FILE
+PLYVANTA_RELEASE_STORE_PASSWORD
+PLYVANTA_RELEASE_KEY_ALIAS
+PLYVANTA_RELEASE_KEY_PASSWORD
+```
+
+The release keystore is the permanent identity for updating `app.plyvanta`.
+Keep an encrypted backup of the keystore and a separately protected backup of
+its password; losing either prevents future APKs from updating stable installs.
+
+The task refuses a partially configured signing identity and writes the three
+upload-ready assets to:
+
+```text
+app/build/outputs/stable/Plyvanta-1.0.0.apk
+app/build/outputs/stable/Plyvanta-1.0.0-update.json
+app/build/outputs/stable/SHA256SUMS
+```
+
+Before distribution, install and exercise the exact packaged artifact:
+
+```sh
+scripts/smoke-test-apk.sh \
+  app/build/outputs/stable/Plyvanta-1.0.0.apk \
+  app/build/outputs/stable/Plyvanta-1.0.0-update.json \
+  2085e2b0c5bbd6273203f2aa0064b0f6f291a43746f9989dd0cea30e6cec4d8e
+```
 
 ## Architecture
 
@@ -259,7 +284,7 @@ can still observe requests according to their own privacy practices.
   Android battery, network, app-standby, notification-permission, or force-stop
   behavior.
 - Debug previews follow only compatible `app.plyvanta.debug` prereleases.
-  A future production-signed `app.plyvanta` release is a separate update channel.
+  Production-signed `app.plyvanta` builds follow non-prerelease stable releases.
 - Availability and use of YouTube content remain subject to applicable law and
   the service's terms.
 

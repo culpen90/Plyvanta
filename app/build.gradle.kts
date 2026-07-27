@@ -1,32 +1,52 @@
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import javax.inject.Inject
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.process.ExecOperations
 
 plugins {
     id("com.android.application")
 }
 
-abstract class CopyPreviewApk : DefaultTask() {
+abstract class CopyPackagedApk : DefaultTask() {
     @get:InputFile
     @get:PathSensitive(PathSensitivity.NAME_ONLY)
     abstract val sourceApk: RegularFileProperty
 
     @get:OutputFile
-    abstract val previewApk: RegularFileProperty
+    abstract val destinationApk: RegularFileProperty
+
+    @get:Input
+    abstract val signingConfigured: Property<Boolean>
+
+    init {
+        signingConfigured.convention(true)
+    }
 
     @TaskAction
     fun copy() {
+        if (!signingConfigured.get()) {
+            throw GradleException(
+                "packageStableRelease requires all four "
+                    + "PLYVANTA_RELEASE_* signing environment variables."
+            )
+        }
         val source = sourceApk.get().asFile.toPath()
-        val output = previewApk.get().asFile.toPath()
+        val output = destinationApk.get().asFile.toPath()
         Files.createDirectories(output.parent)
         Files.copy(source, output, StandardCopyOption.REPLACE_EXISTING)
     }
@@ -91,12 +111,135 @@ abstract class GenerateUpdateMetadata : DefaultTask() {
     }
 }
 
+abstract class GenerateChecksums : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NAME_ONLY)
+    abstract val releaseFiles: ConfigurableFileCollection
+
+    @get:OutputFile
+    abstract val checksumFile: RegularFileProperty
+
+    @TaskAction
+    fun generate() {
+        val lines = releaseFiles.files
+            .sortedBy { it.name }
+            .map { file ->
+                val digest = MessageDigest.getInstance("SHA-256")
+                file.inputStream().use { input ->
+                    val buffer = ByteArray(8 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) {
+                            break
+                        }
+                        digest.update(buffer, 0, count)
+                    }
+                }
+                val sha256 = digest.digest().joinToString("") { byte: Byte ->
+                    "%02x".format(byte.toInt() and 0xff)
+                }
+                "$sha256  ${file.name}"
+            }
+        val output = checksumFile.get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(lines.joinToString(separator = "\n", postfix = "\n"))
+    }
+}
+
+abstract class VerifyApkSigner @Inject constructor(
+    private val execOperations: ExecOperations,
+) : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val apkFile: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val apkSignerExecutable: RegularFileProperty
+
+    @get:Input
+    abstract val expectedCertificateSha256: Property<String>
+
+    @TaskAction
+    fun verify() {
+        val standardOutput = ByteArrayOutputStream()
+        val errorOutput = ByteArrayOutputStream()
+        val result = execOperations.exec {
+            commandLine(
+                apkSignerExecutable.get().asFile.absolutePath,
+                "verify",
+                "--verbose",
+                "--print-certs",
+                apkFile.get().asFile.absolutePath,
+            )
+            this.standardOutput = standardOutput
+            this.errorOutput = errorOutput
+            isIgnoreExitValue = true
+        }
+        if (result.exitValue != 0) {
+            throw GradleException(
+                "apksigner rejected the stable APK:\n"
+                    + errorOutput.toString(StandardCharsets.UTF_8)
+            )
+        }
+
+        val signerPattern = Regex(
+            "^Signer #\\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})$",
+            RegexOption.MULTILINE,
+        )
+        val signerDigests = signerPattern
+            .findAll(standardOutput.toString(StandardCharsets.UTF_8))
+            .map { it.groupValues[1].lowercase() }
+            .toList()
+        val expected = expectedCertificateSha256.get().lowercase()
+        if (signerDigests != listOf(expected)) {
+            throw GradleException(
+                "Stable APK signer mismatch. Expected exactly $expected, found "
+                    + signerDigests.joinToString().ifEmpty { "none" }
+            )
+        }
+        logger.lifecycle("Verified stable APK signer SHA-256: $expected")
+    }
+}
+
 val baseVersionName = "1.0.0"
+val baseApplicationId = "app.plyvanta"
 val appVersionCode = 4
+val minimumSdkVersion = 26
+val targetSdkVersion = 36
 val debugPreviewNumber = 4
 val debugPreviewVersion = "$baseVersionName-debug.$debugPreviewNumber"
 val debugPreviewApkName = "Plyvanta-$debugPreviewVersion.apk"
 val debugPreviewMetadataName = "Plyvanta-$debugPreviewVersion-update.json"
+val stableReleaseApkName = "Plyvanta-$baseVersionName.apk"
+val stableReleaseMetadataName = "Plyvanta-$baseVersionName-update.json"
+val stableReleaseCertificateSha256 =
+    "2085e2b0c5bbd6273203f2aa0064b0f6f291a43746f9989dd0cea30e6cec4d8e"
+
+val releaseStoreFile =
+    providers.environmentVariable("PLYVANTA_RELEASE_STORE_FILE")
+val releaseStorePassword =
+    providers.environmentVariable("PLYVANTA_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias =
+    providers.environmentVariable("PLYVANTA_RELEASE_KEY_ALIAS")
+val releaseKeyPassword =
+    providers.environmentVariable("PLYVANTA_RELEASE_KEY_PASSWORD")
+val releaseSigningInputs = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+)
+val configuredReleaseSigningInputCount =
+    releaseSigningInputs.count { it.isPresent }
+if (configuredReleaseSigningInputCount !in setOf(0, releaseSigningInputs.size)) {
+    throw GradleException(
+        "Stable signing is only partially configured. Set all four "
+            + "PLYVANTA_RELEASE_* environment variables or none of them."
+    )
+}
+val releaseSigningConfigured =
+    configuredReleaseSigningInputCount == releaseSigningInputs.size
 
 val generatedLegalAssetsDirectory = layout.buildDirectory.dir("generated/legalAssets")
 val prepareLegalAssets by tasks.registering(Sync::class) {
@@ -108,17 +251,28 @@ val prepareLegalAssets by tasks.registering(Sync::class) {
 }
 
 android {
-    namespace = "app.plyvanta"
-    compileSdk = 36
+    namespace = baseApplicationId
+    compileSdk = targetSdkVersion
     buildToolsVersion = "36.0.0"
 
     defaultConfig {
-        applicationId = "app.plyvanta"
-        minSdk = 26
-        targetSdk = 36
+        applicationId = baseApplicationId
+        minSdk = minimumSdkVersion
+        targetSdk = targetSdkVersion
         versionCode = appVersionCode
         versionName = baseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("stableRelease") {
+                storeFile = file(releaseStoreFile.get())
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
+        }
     }
 
     buildTypes {
@@ -129,6 +283,12 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            vcsInfo {
+                include = false
+            }
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("stableRelease")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -172,10 +332,10 @@ tasks.named("preBuild").configure {
     dependsOn(prepareLegalAssets)
 }
 
-val copyDebugPreviewApk by tasks.registering(CopyPreviewApk::class) {
+val copyDebugPreviewApk by tasks.registering(CopyPackagedApk::class) {
     dependsOn("assembleDebug")
     sourceApk.set(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
-    previewApk.set(
+    destinationApk.set(
         layout.buildDirectory.file("outputs/preview/$debugPreviewApkName")
     )
 }
@@ -186,15 +346,84 @@ val generateDebugPreviewMetadata by tasks.registering(GenerateUpdateMetadata::cl
     metadataFile.set(
         layout.buildDirectory.file("outputs/preview/$debugPreviewMetadataName")
     )
-    packageName.set("app.plyvanta.debug")
+    packageName.set("$baseApplicationId.debug")
     channel.set("preview")
     versionCode.set(appVersionCode)
     versionName.set(debugPreviewVersion)
-    minimumSdk.set(26)
+    minimumSdk.set(minimumSdkVersion)
 }
 
 val packageDebugPreview by tasks.registering {
     dependsOn(generateDebugPreviewMetadata)
+}
+
+val copyStableReleaseApk by tasks.registering(CopyPackagedApk::class) {
+    notCompatibleWithConfigurationCache(
+        "Stable signing credentials must not be persisted in the configuration cache."
+    )
+    dependsOn("assembleRelease")
+    signingConfigured.set(releaseSigningConfigured)
+    sourceApk.set(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
+    destinationApk.set(
+        layout.buildDirectory.file("outputs/stable/$stableReleaseApkName")
+    )
+}
+
+val verifyStableReleaseSigner by tasks.registering(VerifyApkSigner::class) {
+    notCompatibleWithConfigurationCache(
+        "Stable signing credentials must not be persisted in the configuration cache."
+    )
+    dependsOn(copyStableReleaseApk)
+    apkFile.set(layout.buildDirectory.file("outputs/stable/$stableReleaseApkName"))
+    val apkSignerName =
+        if (System.getProperty("os.name").startsWith("Windows")) {
+            "apksigner.bat"
+        } else {
+            "apksigner"
+        }
+    apkSignerExecutable.set(
+        androidComponents.sdkComponents.sdkDirectory.map { sdkDirectory ->
+            sdkDirectory.file(
+                "build-tools/${android.buildToolsVersion}/$apkSignerName"
+            )
+        }
+    )
+    expectedCertificateSha256.set(stableReleaseCertificateSha256)
+}
+
+val generateStableReleaseMetadata by tasks.registering(GenerateUpdateMetadata::class) {
+    notCompatibleWithConfigurationCache(
+        "Stable signing credentials must not be persisted in the configuration cache."
+    )
+    dependsOn(verifyStableReleaseSigner)
+    apkFile.set(layout.buildDirectory.file("outputs/stable/$stableReleaseApkName"))
+    metadataFile.set(
+        layout.buildDirectory.file("outputs/stable/$stableReleaseMetadataName")
+    )
+    packageName.set(baseApplicationId)
+    channel.set("stable")
+    versionCode.set(appVersionCode)
+    versionName.set(baseVersionName)
+    minimumSdk.set(minimumSdkVersion)
+}
+
+val generateStableReleaseChecksums by tasks.registering(GenerateChecksums::class) {
+    notCompatibleWithConfigurationCache(
+        "Stable signing credentials must not be persisted in the configuration cache."
+    )
+    dependsOn(generateStableReleaseMetadata)
+    releaseFiles.from(
+        layout.buildDirectory.file("outputs/stable/$stableReleaseApkName"),
+        layout.buildDirectory.file("outputs/stable/$stableReleaseMetadataName"),
+    )
+    checksumFile.set(layout.buildDirectory.file("outputs/stable/SHA256SUMS"))
+}
+
+val packageStableRelease by tasks.registering {
+    notCompatibleWithConfigurationCache(
+        "Stable signing credentials must not be persisted in the configuration cache."
+    )
+    dependsOn(generateStableReleaseChecksums)
 }
 
 dependencies {

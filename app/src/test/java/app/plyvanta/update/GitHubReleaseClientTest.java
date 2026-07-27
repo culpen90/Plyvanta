@@ -63,6 +63,41 @@ public final class GitHubReleaseClientTest {
     }
 
     @Test
+    public void findsNewerStableReleaseFromMatchingMetadataAndApk() throws IOException {
+        FixtureInterceptor fixture = new FixtureInterceptor(
+                releaseList(false, false, "v1.0.0", standardAssets(
+                        "1.0.0",
+                        SHA256
+                )),
+                metadata(
+                        "app.plyvanta",
+                        "stable",
+                        4,
+                        "1.0.0",
+                        "Plyvanta-1.0.0.apk",
+                        SHA256
+                )
+        );
+
+        UpdateRelease update = client(fixture).fetchLatestUpdate(
+                3,
+                "app.plyvanta",
+                UpdateChannel.STABLE,
+                36
+        );
+
+        assertNotNull(update);
+        assertEquals(4L, update.getVersionCode());
+        assertEquals("1.0.0", update.getVersionName());
+        assertEquals(
+                "https://github.com/culpen90/Plyvanta/releases/download/"
+                        + "v1.0.0/Plyvanta-1.0.0.apk",
+                update.getApkUrl()
+        );
+        assertEquals(2, fixture.calls.get());
+    }
+
+    @Test
     public void equalInstalledVersionDoesNotOfferAnUpdate() throws IOException {
         FixtureInterceptor fixture = new FixtureInterceptor(
                 releaseList(false, true, "v1.0.0-debug.4", standardAssets(

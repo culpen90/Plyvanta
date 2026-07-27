@@ -1,8 +1,8 @@
 # Plyvanta third-party notices
 
 This file records the third-party software included in the Plyvanta Android
-runtime. Versions match the resolved `debugRuntimeClasspath` used for the
-`v1.0.0-debug.4` prerelease build on 2026-07-26.
+runtime. Versions match the resolved `releaseRuntimeClasspath` used for the
+`v1.0.0` stable build on 2026-07-26.
 
 Applicable license texts, notices, and required license URIs are provided in
 `LICENSE` and `licenses/`. The same files are embedded in the APK under

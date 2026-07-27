@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.0 - 2026-07-26
+
+First stable release of Plyvanta, built from the functionality validated in
+Debug Preview 4.
+
+### Included
+
+- Direct content-stream playback for supported YouTube links.
+- SponsorBlock skipping with configurable categories and an Undo action.
+- Paste, Share, Open-with, fullscreen, quality limits, and stream recovery.
+- User-reviewed bug reports with separately opt-in diagnostics and video
+  context.
+- Trusted update notifications backed by immutable GitHub releases, stable
+  metadata, and APK digest validation.
+
+### Distribution
+
+- Uses the production package `app.plyvanta`, version `1.0.0` (`versionCode` 4).
+- Is optimized, resource-shrunk, and signed with Plyvanta's dedicated release
+  identity.
+- Installs separately from debug previews, which use `app.plyvanta.debug`.
+- Includes generated stable update metadata and SHA-256 checksums beside the
+  APK.
+
 ## 1.0.0-debug.4 - 2026-07-26
 
 ### Added
