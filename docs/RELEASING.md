@@ -15,6 +15,12 @@ latest stable `vX.Y.Z` tag:
 - `build:`, `chore:`, `ci:`, `docs:`, `refactor:`, `style:`, and `test:` do not
   publish a release unless they declare a breaking change.
 
+The GitHub Release body uses the qualifying Conventional Commit subjects as its
+reader-facing update explanation, grouped into sections such as **Features** and
+**Bug Fixes**. Keep those subjects specific and understandable to users. The
+release-tooling tests generate representative notes and fail if the explanatory
+entries disappear.
+
 The bot runs only on `main`. Debug previews keep their existing
 `vX.Y.Z-debug.N` convention and are not produced by this stable release job.
 
