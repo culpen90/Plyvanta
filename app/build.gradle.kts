@@ -202,9 +202,27 @@ abstract class VerifyApkSigner @Inject constructor(
     }
 }
 
-val baseVersionName = "1.0.0"
+val baseVersionName = providers.gradleProperty("plyvantaVersionName")
+    .orElse("1.0.0")
+    .get()
+if (!Regex("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+        .matches(baseVersionName)
+) {
+    throw GradleException(
+        "plyvantaVersionName must be a stable semantic version such as 1.2.3."
+    )
+}
 val baseApplicationId = "app.plyvanta"
-val appVersionCode = 4
+val appVersionCodeText = providers.gradleProperty("plyvantaVersionCode")
+    .orElse("4")
+    .get()
+val appVersionCode = appVersionCodeText.toIntOrNull()
+    ?: throw GradleException("plyvantaVersionCode must be an integer.")
+if (appVersionCode !in 1..2_100_000_000) {
+    throw GradleException(
+        "plyvantaVersionCode must be between 1 and 2100000000."
+    )
+}
 val minimumSdkVersion = 26
 val targetSdkVersion = 36
 val debugPreviewNumber = 4
