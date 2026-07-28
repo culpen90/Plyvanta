@@ -11,9 +11,11 @@ import java.util.Objects;
 
 public final class UpdateChecker {
     private static final Object CHECK_LOCK = new Object();
+    private static volatile ReleaseSource debugReleaseSourceOverride;
 
     public enum Status {
         SUCCESS,
+        UNVERIFIED_RELEASE,
         RETRYABLE_FAILURE,
         PERMANENT_FAILURE
     }
@@ -53,6 +55,7 @@ public final class UpdateChecker {
     interface ReleaseSource {
         UpdateRelease fetchLatestUpdate(
                 long installedVersionCode,
+                String installedVersionName,
                 String installedPackageName,
                 UpdateChannel channel,
                 int deviceSdk
@@ -77,17 +80,20 @@ public final class UpdateChecker {
 
     static final class InstalledApp {
         private final long versionCode;
+        private final String versionName;
         private final String packageName;
         private final UpdateChannel channel;
         private final int deviceSdk;
 
         InstalledApp(
                 long versionCode,
+                String versionName,
                 String packageName,
                 UpdateChannel channel,
                 int deviceSdk
         ) {
             this.versionCode = versionCode;
+            this.versionName = Objects.requireNonNull(versionName, "versionName");
             this.packageName = Objects.requireNonNull(packageName, "packageName");
             this.channel = Objects.requireNonNull(channel, "channel");
             this.deviceSdk = deviceSdk;
@@ -108,7 +114,7 @@ public final class UpdateChecker {
     public UpdateChecker(Context context) {
         this(
                 new AndroidInstalledAppSource(applicationContext(context)),
-                new GitHubReleaseClient()::fetchLatestUpdate,
+                releaseSource(applicationContext(context)),
                 new PreferencesReleaseStore(
                         new UpdatePreferences(applicationContext(context))
                 ),
@@ -153,43 +159,79 @@ public final class UpdateChecker {
         if (storedRelease != null
                 && !storedRelease.isNewerThan(installedApp.versionCode)) {
             releaseStore.clearAvailableRelease();
-            storedRelease = null;
             notificationCanceller.cancel();
+            storedRelease = null;
         }
+        UpdateRelease availableStoredRelease = storedRelease;
 
         final UpdateRelease fetchedRelease;
         try {
             fetchedRelease = releaseSource.fetchLatestUpdate(
                     installedApp.versionCode,
+                    installedApp.versionName,
                     installedApp.packageName,
                     installedApp.channel,
                     installedApp.deviceSdk
             );
+        } catch (GitHubReleaseClient.UnverifiedReleaseException unverifiedRelease) {
+            return new Result(
+                    Status.UNVERIFIED_RELEASE,
+                    null,
+                    availableStoredRelease
+            );
         } catch (IOException transientFailure) {
-            return new Result(Status.RETRYABLE_FAILURE, null, storedRelease);
+            return new Result(
+                    Status.RETRYABLE_FAILURE,
+                    null,
+                    availableStoredRelease
+            );
         }
 
-        UpdateRelease availableRelease = fetchedRelease;
         if (fetchedRelease == null) {
-            return new Result(Status.SUCCESS, null, storedRelease);
+            if (storedRelease != null) {
+                releaseStore.clearAvailableRelease();
+                notificationCanceller.cancel();
+            }
+            return new Result(Status.SUCCESS, null, null);
         }
-        if (storedRelease != null
-                && storedRelease.getVersionCode() > fetchedRelease.getVersionCode()) {
-            availableRelease = storedRelease;
-        } else if (!releaseStore.storeAvailableRelease(fetchedRelease)) {
+        if (fetchedRelease.equals(storedRelease)) {
+            return new Result(Status.SUCCESS, fetchedRelease, fetchedRelease);
+        }
+        if (!releaseStore.storeAvailableRelease(fetchedRelease)) {
             return new Result(
                     Status.RETRYABLE_FAILURE,
                     fetchedRelease,
-                    storedRelease
+                    availableStoredRelease
             );
         }
-        return new Result(Status.SUCCESS, fetchedRelease, availableRelease);
+        if (storedRelease == null
+                || storedRelease.getVersionCode() != fetchedRelease.getVersionCode()
+                || !storedRelease.getVersionName().equals(
+                        fetchedRelease.getVersionName()
+                )) {
+            notificationCanceller.cancel();
+        }
+        return new Result(Status.SUCCESS, fetchedRelease, fetchedRelease);
     }
 
     private static Context applicationContext(Context context) {
         Context checkedContext = Objects.requireNonNull(context, "context");
         Context applicationContext = checkedContext.getApplicationContext();
         return applicationContext == null ? checkedContext : applicationContext;
+    }
+
+    private static ReleaseSource releaseSource(Context context) {
+        ReleaseSource override = debugReleaseSourceOverride;
+        boolean debuggable =
+                (context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        if (debuggable && override != null) {
+            return override;
+        }
+        return new GitHubReleaseClient()::fetchLatestUpdate;
+    }
+
+    static void setDebugReleaseSourceOverrideForTests(ReleaseSource releaseSource) {
+        debugReleaseSourceOverride = releaseSource;
     }
 
     private static final class AndroidInstalledAppSource implements InstalledAppSource {
@@ -216,10 +258,18 @@ public final class UpdateChecker {
                     : packageInfo.versionCode;
             boolean debuggable =
                     (context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+            UpdateChannel channel = UpdateChannel.forDebuggableApp(debuggable);
+            String installedVersionName = packageInfo.versionName;
+            if (!channel.matchesVersion(installedVersionName)) {
+                throw new InstalledAppUnavailableException(
+                        new IllegalStateException("Installed version name is invalid")
+                );
+            }
             return new InstalledApp(
                     installedVersionCode,
+                    installedVersionName,
                     context.getPackageName(),
-                    UpdateChannel.forDebuggableApp(debuggable),
+                    channel,
                     Build.VERSION.SDK_INT
             );
         }

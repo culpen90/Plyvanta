@@ -7,6 +7,7 @@ final class ManualUpdateCheckController {
         IDLE,
         CHECKING,
         UP_TO_DATE,
+        UNVERIFIED,
         ERROR
     }
 
@@ -29,14 +30,24 @@ final class ManualUpdateCheckController {
         return true;
     }
 
+    void resetFeedbackWhenUpdateIsAvailable(boolean updateAvailable) {
+        if (updateAvailable && state != State.CHECKING) {
+            state = State.IDLE;
+        }
+    }
+
     Completion complete(UpdateChecker.Status status, boolean updateAvailable) {
         if (status == UpdateChecker.Status.SUCCESS && updateAvailable) {
             state = State.IDLE;
             return Completion.SHOW_UPDATE;
         }
-        state = status == UpdateChecker.Status.SUCCESS
-                ? State.UP_TO_DATE
-                : State.ERROR;
+        if (status == UpdateChecker.Status.SUCCESS) {
+            state = State.UP_TO_DATE;
+        } else if (status == UpdateChecker.Status.UNVERIFIED_RELEASE) {
+            state = State.UNVERIFIED;
+        } else {
+            state = State.ERROR;
+        }
         return Completion.SHOW_FEEDBACK;
     }
 }

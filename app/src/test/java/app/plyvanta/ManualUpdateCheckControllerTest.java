@@ -45,6 +45,28 @@ public final class ManualUpdateCheckControllerTest {
     }
 
     @Test
+    public void unverifiedReleaseShowsUnverifiedAndAllowsRetry() {
+        ManualUpdateCheckController controller = checkingController();
+
+        assertEquals(
+                ManualUpdateCheckController.Completion.SHOW_FEEDBACK,
+                controller.complete(UpdateChecker.Status.UNVERIFIED_RELEASE, false)
+        );
+        assertEquals(
+                ManualUpdateCheckController.State.UNVERIFIED,
+                controller.getState()
+        );
+        assertFalse(
+                controller.getState() == ManualUpdateCheckController.State.UP_TO_DATE
+        );
+        assertTrue(controller.start());
+        assertEquals(
+                ManualUpdateCheckController.State.CHECKING,
+                controller.getState()
+        );
+    }
+
+    @Test
     public void retryableFailureShowsErrorAndAllowsRetry() {
         assertErrorAndRetry(UpdateChecker.Status.RETRYABLE_FAILURE);
     }
@@ -67,6 +89,23 @@ public final class ManualUpdateCheckControllerTest {
                 ManualUpdateCheckController.Completion.SHOW_UPDATE,
                 controller.complete(UpdateChecker.Status.SUCCESS, true)
         );
+        assertEquals(
+                ManualUpdateCheckController.State.IDLE,
+                controller.getState()
+        );
+    }
+
+    @Test
+    public void storedUpdateClearsStaleUpToDateFeedback() {
+        ManualUpdateCheckController controller = checkingController();
+        controller.complete(UpdateChecker.Status.SUCCESS, false);
+        assertEquals(
+                ManualUpdateCheckController.State.UP_TO_DATE,
+                controller.getState()
+        );
+
+        controller.resetFeedbackWhenUpdateIsAvailable(true);
+
         assertEquals(
                 ManualUpdateCheckController.State.IDLE,
                 controller.getState()

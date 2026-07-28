@@ -21,6 +21,7 @@ import android.service.notification.StatusBarNotification;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SdkSuppress;
 import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry;
 import androidx.test.runner.lifecycle.Stage;
@@ -91,6 +92,7 @@ public final class UpdateNotificationNavigationTest {
 
     @After
     public void tearDown() {
+        UpdateChecker.setDebugReleaseSourceOverrideForTests(null);
         notificationManager.cancelAll();
         context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
                 .edit()
@@ -106,19 +108,8 @@ public final class UpdateNotificationNavigationTest {
     @Test
     public void notificationOpensUpdateInColdAndWarmActivityThenDownloadsTrustedApk()
             throws Exception {
-        long installedVersionCode = installedVersionCode();
-        long offeredVersionCode = installedVersionCode + 1L;
-        String offeredVersionName = "999.0.0-debug." + offeredVersionCode;
-        UpdateRelease release = new UpdateRelease(
-                offeredVersionCode,
-                offeredVersionName,
-                "https://github.com/Plyvanta/Plyvanta/releases/download/"
-                        + "v" + offeredVersionName + "/Plyvanta-"
-                        + offeredVersionName + ".apk",
-                "https://github.com/Plyvanta/Plyvanta/releases/tag/v"
-                        + offeredVersionName,
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        );
+        UpdateRelease release = newerSyntheticRelease();
+        installFakeReleaseSource(release);
         assertTrue(new UpdatePreferences(context).storeAvailableRelease(release));
 
         PendingIntent updateIntent = postAndFindUpdateIntent(release);
@@ -170,6 +161,71 @@ public final class UpdateNotificationNavigationTest {
         } finally {
             instrumentation.removeMonitor(downloadMonitor);
         }
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 36)
+    public void manualCheckFromSettingsShowsTheExactAvailableUpdate() throws Exception {
+        UpdateRelease release = newerSyntheticRelease();
+        installFakeReleaseSource(release);
+        UpdatePreferences updatePreferences = new UpdatePreferences(context);
+        assertNull(updatePreferences.availableRelease());
+
+        Activity activity = launchMainActivity();
+        assertSame(activity, resumedMainActivity());
+        assertTrue(clickContentDescription(context.getString(R.string.settings)));
+        assertTrue(waitForText("Plyvanta settings"));
+
+        assertTrue(clickText(context.getString(R.string.check_for_updates_now)));
+        String updateDialogTitle = context.getString(
+                R.string.update_dialog_title,
+                release.getVersionName()
+        );
+        assertTrue(waitForText(updateDialogTitle));
+        assertTrue(waitUntilTextIsAbsent("Plyvanta settings"));
+
+        UpdateRelease storedRelease = updatePreferences.availableRelease();
+        assertEquals(release, storedRelease);
+    }
+
+    private Activity launchMainActivity() {
+        Intent launchIntent = context.getPackageManager()
+                .getLaunchIntentForPackage(context.getPackageName());
+        assertNotNull("No launcher intent for MainActivity", launchIntent);
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        Activity activity = instrumentation.startActivitySync(launchIntent);
+        launchedActivity.set(activity);
+        assertNotNull("Launcher intent did not open MainActivity", activity);
+        instrumentation.waitForIdleSync();
+        return activity;
+    }
+
+    private UpdateRelease newerSyntheticRelease() throws Exception {
+        long offeredVersionCode = installedVersionCode() + 1L;
+        String offeredVersionName = "999.0.0-debug." + offeredVersionCode;
+        return new UpdateRelease(
+                offeredVersionCode,
+                offeredVersionName,
+                "Plyvanta/Plyvanta",
+                "https://github.com/Plyvanta/Plyvanta/releases/download/"
+                        + "v" + offeredVersionName + "/Plyvanta-"
+                        + offeredVersionName + ".apk",
+                "https://github.com/Plyvanta/Plyvanta/releases/tag/v"
+                        + offeredVersionName,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+    }
+
+    private static void installFakeReleaseSource(UpdateRelease release) {
+        UpdateChecker.setDebugReleaseSourceOverrideForTests(
+                (
+                        ignoredInstalledVersionCode,
+                        ignoredInstalledVersionName,
+                        ignoredInstalledPackageName,
+                        ignoredChannel,
+                        ignoredDeviceSdk
+                ) -> release
+        );
     }
 
     private PendingIntent postAndFindUpdateIntent(UpdateRelease release) {
@@ -264,13 +320,32 @@ public final class UpdateNotificationNavigationTest {
     }
 
     private boolean clickText(String text) {
-        AccessibilityNodeInfo node = findNodeWithText(text);
-        return node != null
-                && node.isClickable()
-                && node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+        return clickNodeOrClickableAncestor(findNodeWithText(text));
+    }
+
+    private boolean clickContentDescription(String contentDescription) {
+        return clickNodeOrClickableAncestor(
+                findNode(contentDescription, true)
+        );
+    }
+
+    private boolean clickNodeOrClickableAncestor(AccessibilityNodeInfo node) {
+        AccessibilityNodeInfo candidate = node;
+        while (candidate != null && !candidate.isClickable()) {
+            candidate = candidate.getParent();
+        }
+        return candidate != null
+                && candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK);
     }
 
     private AccessibilityNodeInfo findNodeWithText(String expectedText) {
+        return findNode(expectedText, false);
+    }
+
+    private AccessibilityNodeInfo findNode(
+            String expectedValue,
+            boolean matchContentDescription
+    ) {
         AccessibilityNodeInfo root =
                 instrumentation.getUiAutomation().getRootInActiveWindow();
         if (root == null) {
@@ -287,8 +362,11 @@ public final class UpdateNotificationNavigationTest {
                         "Device System UI is unresponsive; reboot the test device"
                 );
             }
-            if (nodeText != null
-                    && expectedText.equalsIgnoreCase(nodeText.toString())) {
+            CharSequence candidateValue = matchContentDescription
+                    ? node.getContentDescription()
+                    : nodeText;
+            if (candidateValue != null
+                    && expectedValue.equalsIgnoreCase(candidateValue.toString())) {
                 return node;
             }
             for (int index = 0; index < node.getChildCount(); index++) {

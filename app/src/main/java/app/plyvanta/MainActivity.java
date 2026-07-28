@@ -50,6 +50,7 @@ import android.widget.Toast;
 
 import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
+import androidx.lifecycle.Lifecycle;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.PlaybackException;
@@ -70,6 +71,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import app.plyvanta.playback.NewPipePlaylistResolver;
 import app.plyvanta.playback.NewPipeVideoResolver;
@@ -85,6 +87,7 @@ import app.plyvanta.sponsor.SponsorBlockClient;
 import app.plyvanta.sponsor.SponsorSegment;
 import app.plyvanta.support.DiagnosticReport;
 import app.plyvanta.update.UpdateChecker;
+import app.plyvanta.update.UpdateDownloadVerification;
 import app.plyvanta.update.UpdateNotificationManager;
 import app.plyvanta.update.UpdatePreferences;
 import app.plyvanta.update.UpdateRelease;
@@ -131,6 +134,7 @@ public final class MainActivity extends ComponentActivity {
     private final ExecutorService updateCheckExecutor = Executors.newSingleThreadExecutor();
     private final AtomicInteger loadGeneration = new AtomicInteger();
     private final AtomicInteger playlistLoadGeneration = new AtomicInteger();
+    private final AtomicLong updateDownloadVerificationGeneration = new AtomicLong();
     private final PlaybackSessionState playbackSessionState =
             new PlaybackSessionState();
     private final ManualUpdateCheckController manualUpdateCheckController =
@@ -1154,6 +1158,9 @@ public final class MainActivity extends ComponentActivity {
         content.addView(checkForUpdatesRow);
 
         UpdateRelease availableUpdate = availableUpdate();
+        manualUpdateCheckController.resetFeedbackWhenUpdateIsAvailable(
+                availableUpdate != null
+        );
         Button downloadUpdate = null;
         View availableUpdateRow = null;
         if (availableUpdate != null) {
@@ -1325,17 +1332,24 @@ public final class MainActivity extends ComponentActivity {
             return;
         }
 
-        boolean upToDate = manualUpdateCheckController.getState()
-                == ManualUpdateCheckController.State.UP_TO_DATE;
+        ManualUpdateCheckController.State feedbackState =
+                manualUpdateCheckController.getState();
         boolean settingsVisible =
                 activeSettingsDialog != null && activeSettingsDialog.isShowing();
         renderManualUpdateCheckState();
         if (!settingsVisible) {
+            int feedbackMessage;
+            if (feedbackState == ManualUpdateCheckController.State.UP_TO_DATE) {
+                feedbackMessage = R.string.update_check_up_to_date;
+            } else if (feedbackState
+                    == ManualUpdateCheckController.State.UNVERIFIED) {
+                feedbackMessage = R.string.update_check_unverified;
+            } else {
+                feedbackMessage = R.string.update_check_error;
+            }
             Toast.makeText(
                     this,
-                    upToDate
-                            ? R.string.update_check_up_to_date
-                            : R.string.update_check_error,
+                    feedbackMessage,
                     Toast.LENGTH_LONG
             ).show();
         }
@@ -1356,6 +1370,12 @@ public final class MainActivity extends ComponentActivity {
                 activeUpdateCheckDetail.setText(R.string.update_check_up_to_date);
                 activeUpdateCheckDetail.setTextColor(getColor(R.color.mint));
                 activeUpdateCheckAction.setText(R.string.check_again);
+                activeUpdateCheckAction.setEnabled(true);
+                break;
+            case UNVERIFIED:
+                activeUpdateCheckDetail.setText(R.string.update_check_unverified);
+                activeUpdateCheckDetail.setTextColor(getColor(R.color.coral));
+                activeUpdateCheckAction.setText(R.string.try_again);
                 activeUpdateCheckAction.setEnabled(true);
                 break;
             case ERROR:
@@ -2018,7 +2038,74 @@ public final class MainActivity extends ComponentActivity {
             mainHandler.post(() -> showUpdateDialog(currentRelease));
             return;
         }
-        openUpdateDownload(currentRelease);
+        Toast.makeText(
+                this,
+                R.string.update_download_verifying,
+                Toast.LENGTH_SHORT
+        ).show();
+        Context applicationContext = getApplicationContext();
+        long verificationGeneration =
+                updateDownloadVerificationGeneration.incrementAndGet();
+        updateCheckExecutor.execute(() -> {
+            UpdateChecker.Result result;
+            try {
+                result = new UpdateChecker(applicationContext).check();
+            } catch (RuntimeException unexpectedFailure) {
+                result = null;
+            }
+            UpdateChecker.Result completedResult = result;
+            mainHandler.post(() -> finishUpdateDownloadVerification(
+                    displayedRelease,
+                    completedResult,
+                    verificationGeneration
+            ));
+        });
+    }
+
+    private void finishUpdateDownloadVerification(
+            UpdateRelease displayedRelease,
+            UpdateChecker.Result result,
+            long verificationGeneration
+    ) {
+        boolean resumed = getLifecycle()
+                .getCurrentState()
+                .isAtLeast(Lifecycle.State.RESUMED);
+        if (destroyed
+                || isFinishing()
+                || isDestroyed()
+                || !UpdateDownloadVerification.canApplyResult(
+                        verificationGeneration,
+                        updateDownloadVerificationGeneration.get(),
+                        resumed
+                )) {
+            return;
+        }
+        UpdateChecker.Status status = result == null ? null : result.getStatus();
+        UpdateRelease checkedRelease =
+                result == null ? null : result.getCheckedRelease();
+        UpdateDownloadVerification.Action action = UpdateDownloadVerification.decide(
+                status,
+                displayedRelease,
+                checkedRelease
+        );
+        switch (action) {
+            case OPEN_VERIFIED_RELEASE:
+                openUpdateDownload(checkedRelease);
+                break;
+            case SHOW_REFRESHED_RELEASE:
+                showUpdateDialog(checkedRelease);
+                break;
+            case SHOW_ERROR:
+            default:
+                Toast.makeText(
+                        this,
+                        status == UpdateChecker.Status.UNVERIFIED_RELEASE
+                                ? R.string.update_check_unverified
+                                : R.string.update_download_verification_error,
+                        Toast.LENGTH_LONG
+                ).show();
+                break;
+        }
     }
 
     private void openUpdateDownload(UpdateRelease release) {
@@ -2207,6 +2294,7 @@ public final class MainActivity extends ComponentActivity {
 
     @Override
     protected void onStop() {
+        updateDownloadVerificationGeneration.incrementAndGet();
         skipController.stop();
         playbackSessionState.onStop();
         player.setPlayWhenReady(false);
