@@ -103,14 +103,14 @@ previews cannot be confused. It also writes the release metadata that future
 installed versions require before trusting an update:
 
 ```text
-app/build/outputs/preview/Plyvanta-1.2.0-debug.4.apk
-app/build/outputs/preview/Plyvanta-1.2.0-debug.4-update.json
+app/build/outputs/preview/Plyvanta-1.2.1-debug.4.apk
+app/build/outputs/preview/Plyvanta-1.2.1-debug.4-update.json
 ```
 
 Install it on a connected device or emulator with:
 
 ```sh
-adb install -r app/build/outputs/preview/Plyvanta-1.2.0-debug.4.apk
+adb install -r app/build/outputs/preview/Plyvanta-1.2.1-debug.4.apk
 ```
 
 With one emulator or device connected, verify the exact packaged artifact before
@@ -118,8 +118,8 @@ distribution:
 
 ```sh
 scripts/smoke-test-apk.sh \
-  app/build/outputs/preview/Plyvanta-1.2.0-debug.4.apk \
-  app/build/outputs/preview/Plyvanta-1.2.0-debug.4-update.json \
+  app/build/outputs/preview/Plyvanta-1.2.1-debug.4.apk \
+  app/build/outputs/preview/Plyvanta-1.2.1-debug.4-update.json \
   f316b684e87b4df6deb4c9fc987e530e7c3fae9810e6a3371b0cc0ea05f179f1
 ```
 
@@ -137,7 +137,14 @@ from the same packaging run. The updater ignores mutable releases and releases
 without metadata. It rejects metadata unless its package, preview/stable
 channel, monotonic Android `versionCode`, tag, minimum SDK, APK filename,
 trusted GitHub URL, and SHA-256 all agree with the immutable published GitHub
-asset. Future releases must increment `versionCode` before publication.
+asset. Repository trust is anchored to GitHub repository ID `1313062669`, so an
+owner or repository rename cannot silently disable update discovery. Future
+releases must increment `versionCode` before publication.
+
+An install still on stable `1.1.0` needs one manual update from the official
+GitHub Releases page. That immutable version recognizes only the repository's
+pre-transfer owner URLs, so its own update check cannot accept `1.2.0` even
+though GitHub redirects the API request.
 
 The stable packaging script runs a clean build, both unit-test variants, lint,
 release shrinking, production signing, metadata generation, and checksum
@@ -166,8 +173,8 @@ The task refuses a partially configured signing identity and writes the three
 upload-ready assets to:
 
 ```text
-app/build/outputs/stable/Plyvanta-1.2.0.apk
-app/build/outputs/stable/Plyvanta-1.2.0-update.json
+app/build/outputs/stable/Plyvanta-1.2.1.apk
+app/build/outputs/stable/Plyvanta-1.2.1-update.json
 app/build/outputs/stable/SHA256SUMS
 ```
 
@@ -175,8 +182,8 @@ Before distribution, install and exercise the exact packaged artifact:
 
 ```sh
 scripts/smoke-test-apk.sh \
-  app/build/outputs/stable/Plyvanta-1.2.0.apk \
-  app/build/outputs/stable/Plyvanta-1.2.0-update.json \
+  app/build/outputs/stable/Plyvanta-1.2.1.apk \
+  app/build/outputs/stable/Plyvanta-1.2.1-update.json \
   2085e2b0c5bbd6273203f2aa0064b0f6f291a43746f9989dd0cea30e6cec4d8e
 ```
 
@@ -295,13 +302,13 @@ Playing a link makes these network requests:
   using any segment. Enabled category names are also included in the request. No
   SponsorBlock request is made when every skip category is disabled.
 
-Separately, WorkManager periodically makes an anonymous, read-only request to
-the public **GitHub Releases API** for `Plyvanta/Plyvanta`. Choosing
-**Settings → Check for updates now** explicitly initiates the same anonymous
-GitHub requests. When a release contains the required update metadata, Plyvanta
-downloads that small metadata file from GitHub and validates it locally. The
-requests use no GitHub account, token, device identifier, app usage, video link,
-or viewing history.
+Separately, WorkManager periodically makes anonymous, read-only requests to
+GitHub's public repository and Releases APIs for immutable Plyvanta repository
+ID `1313062669`. Choosing **Settings → Check for updates now** explicitly
+initiates the same anonymous GitHub requests. Plyvanta resolves the repository's
+current canonical name, then downloads a release's small metadata asset from
+GitHub and validates it locally. The requests use no GitHub account, token,
+device identifier, app usage, video link, or viewing history.
 
 Plyvanta does not proxy these requests, upload an account, or send a local
 viewing history to its own service. Network operators and the services contacted

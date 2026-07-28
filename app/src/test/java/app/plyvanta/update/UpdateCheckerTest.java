@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public final class UpdateCheckerTest {
     private static final long INSTALLED_VERSION_CODE = 4L;
+    private static final String INSTALLED_VERSION_NAME = "9.0.0-debug.4";
     private static final String PACKAGE_NAME = "app.plyvanta.debug";
     private static final int DEVICE_SDK = 36;
     private static final String SHA256 =
@@ -31,8 +32,15 @@ public final class UpdateCheckerTest {
         AtomicBoolean notificationCancelled = new AtomicBoolean();
         UpdateChecker checker = checker(
                 installedAppSource(),
-                (installedVersionCode, packageName, channel, deviceSdk) -> {
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> {
                     assertEquals(INSTALLED_VERSION_CODE, installedVersionCode);
+                    assertEquals(INSTALLED_VERSION_NAME, installedVersionName);
                     assertEquals(PACKAGE_NAME, packageName);
                     assertSame(UpdateChannel.PREVIEW, channel);
                     assertEquals(DEVICE_SDK, deviceSdk);
@@ -49,7 +57,7 @@ public final class UpdateCheckerTest {
         assertSame(fetchedRelease, result.getAvailableRelease());
         assertSame(fetchedRelease, store.release);
         assertEquals(1, store.storeCalls);
-        assertFalse(notificationCancelled.get());
+        assertTrue(notificationCancelled.get());
     }
 
     @Test
@@ -57,7 +65,13 @@ public final class UpdateCheckerTest {
         FakeReleaseStore store = new FakeReleaseStore(null, true);
         UpdateChecker checker = checker(
                 installedAppSource(),
-                (installedVersionCode, packageName, channel, deviceSdk) -> null,
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> null,
                 store,
                 new AtomicBoolean()
         );
@@ -71,34 +85,83 @@ public final class UpdateCheckerTest {
     }
 
     @Test
-    public void compatibleStoredReleaseRemainsAvailableWhenFreshFetchFindsNothing() {
+    public void successfulEmptyFetchRetiresStoredReleaseAndNotification() {
         UpdateRelease storedRelease = release(5L);
         FakeReleaseStore store = new FakeReleaseStore(storedRelease, true);
+        AtomicBoolean notificationCancelled = new AtomicBoolean();
         UpdateChecker checker = checker(
                 installedAppSource(),
-                (installedVersionCode, packageName, channel, deviceSdk) -> null,
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> null,
                 store,
-                new AtomicBoolean()
+                notificationCancelled
         );
 
         UpdateChecker.Result result = checker.check();
 
         assertSame(UpdateChecker.Status.SUCCESS, result.getStatus());
         assertNull(result.getCheckedRelease());
-        assertSame(storedRelease, result.getAvailableRelease());
+        assertNull(result.getAvailableRelease());
+        assertNull(store.release);
+        assertEquals(1, store.clearCalls);
         assertEquals(0, store.storeCalls);
+        assertTrue(notificationCancelled.get());
     }
 
     @Test
-    public void ioFailureIsRetryable() {
-        FakeReleaseStore store = new FakeReleaseStore(null, true);
+    public void ioFailureIsRetryableAndPreservesStoredRelease() {
+        UpdateRelease storedRelease = release(5L);
+        FakeReleaseStore store = new FakeReleaseStore(storedRelease, true);
+        AtomicBoolean notificationCancelled = new AtomicBoolean();
         UpdateChecker checker = checker(
                 installedAppSource(),
-                (installedVersionCode, packageName, channel, deviceSdk) -> {
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> {
                     throw new IOException("offline");
                 },
                 store,
-                new AtomicBoolean()
+                notificationCancelled
+        );
+
+        UpdateChecker.Result result = checker.check();
+
+        assertSame(UpdateChecker.Status.RETRYABLE_FAILURE, result.getStatus());
+        assertNull(result.getCheckedRelease());
+        assertSame(storedRelease, result.getAvailableRelease());
+        assertSame(storedRelease, store.release);
+        assertEquals(0, store.clearCalls);
+        assertEquals(0, store.storeCalls);
+        assertFalse(notificationCancelled.get());
+    }
+
+    @Test
+    public void outdatedStoredReleaseIsRetiredBeforeFetchFailure() {
+        UpdateRelease storedRelease = release(INSTALLED_VERSION_CODE);
+        FakeReleaseStore store = new FakeReleaseStore(storedRelease, true);
+        AtomicBoolean notificationCancelled = new AtomicBoolean();
+        UpdateChecker checker = checker(
+                installedAppSource(),
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> {
+                    throw new IOException("offline");
+                },
+                store,
+                notificationCancelled
         );
 
         UpdateChecker.Result result = checker.check();
@@ -106,7 +169,43 @@ public final class UpdateCheckerTest {
         assertSame(UpdateChecker.Status.RETRYABLE_FAILURE, result.getStatus());
         assertNull(result.getCheckedRelease());
         assertNull(result.getAvailableRelease());
+        assertNull(store.release);
+        assertEquals(1, store.clearCalls);
         assertEquals(0, store.storeCalls);
+        assertTrue(notificationCancelled.get());
+    }
+
+    @Test
+    public void unverifiedReleasePreservesStoredReleaseWithoutReplacingIt() {
+        UpdateRelease storedRelease = release(5L);
+        FakeReleaseStore store = new FakeReleaseStore(storedRelease, true);
+        AtomicBoolean notificationCancelled = new AtomicBoolean();
+        UpdateChecker checker = checker(
+                installedAppSource(),
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> {
+                    throw new GitHubReleaseClient.UnverifiedReleaseException(
+                            "unverified release"
+                    );
+                },
+                store,
+                notificationCancelled
+        );
+
+        UpdateChecker.Result result = checker.check();
+
+        assertSame(UpdateChecker.Status.UNVERIFIED_RELEASE, result.getStatus());
+        assertNull(result.getCheckedRelease());
+        assertSame(storedRelease, result.getAvailableRelease());
+        assertSame(storedRelease, store.release);
+        assertEquals(0, store.clearCalls);
+        assertEquals(0, store.storeCalls);
+        assertFalse(notificationCancelled.get());
     }
 
     @Test
@@ -119,7 +218,13 @@ public final class UpdateCheckerTest {
                             new IllegalStateException("missing package")
                     );
                 },
-                (installedVersionCode, packageName, channel, deviceSdk) -> {
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> {
                     fetchCalls.incrementAndGet();
                     return release(5L);
                 },
@@ -137,24 +242,89 @@ public final class UpdateCheckerTest {
     }
 
     @Test
-    public void higherStoredReleaseRemainsEffectiveCandidate() {
+    public void successfulFetchReplacesHigherStoredReleaseAndCancelsNotification() {
         UpdateRelease storedRelease = release(7L);
         UpdateRelease fetchedRelease = release(6L);
         FakeReleaseStore store = new FakeReleaseStore(storedRelease, true);
+        AtomicBoolean notificationCancelled = new AtomicBoolean();
         UpdateChecker checker = checker(
                 installedAppSource(),
-                (installedVersionCode, packageName, channel, deviceSdk) -> fetchedRelease,
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> fetchedRelease,
                 store,
-                new AtomicBoolean()
+                notificationCancelled
         );
 
         UpdateChecker.Result result = checker.check();
 
         assertSame(UpdateChecker.Status.SUCCESS, result.getStatus());
         assertSame(fetchedRelease, result.getCheckedRelease());
-        assertSame(storedRelease, result.getAvailableRelease());
-        assertSame(storedRelease, store.release);
+        assertSame(fetchedRelease, result.getAvailableRelease());
+        assertSame(fetchedRelease, store.release);
+        assertEquals(1, store.storeCalls);
+        assertTrue(notificationCancelled.get());
+    }
+
+    @Test
+    public void exactStoredReleaseNeedsNoRewriteOrNotificationCancellation() {
+        UpdateRelease release = release(5L);
+        FakeReleaseStore store = new FakeReleaseStore(release, true);
+        AtomicBoolean notificationCancelled = new AtomicBoolean();
+        UpdateChecker checker = checker(
+                installedAppSource(),
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> release,
+                store,
+                notificationCancelled
+        );
+
+        UpdateChecker.Result result = checker.check();
+
+        assertSame(UpdateChecker.Status.SUCCESS, result.getStatus());
+        assertSame(release, result.getCheckedRelease());
+        assertSame(release, result.getAvailableRelease());
+        assertSame(release, store.release);
         assertEquals(0, store.storeCalls);
+        assertFalse(notificationCancelled.get());
+    }
+
+    @Test
+    public void canonicalCoordinateRefreshKeepsSameVersionNotification() {
+        UpdateRelease storedRelease = release(5L, "culpen90/Plyvanta");
+        UpdateRelease fetchedRelease = release(5L, "Plyvanta/Plyvanta");
+        FakeReleaseStore store = new FakeReleaseStore(storedRelease, true);
+        AtomicBoolean notificationCancelled = new AtomicBoolean();
+        UpdateChecker checker = checker(
+                installedAppSource(),
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> fetchedRelease,
+                store,
+                notificationCancelled
+        );
+
+        UpdateChecker.Result result = checker.check();
+
+        assertSame(UpdateChecker.Status.SUCCESS, result.getStatus());
+        assertSame(fetchedRelease, result.getCheckedRelease());
+        assertSame(fetchedRelease, result.getAvailableRelease());
+        assertSame(fetchedRelease, store.release);
+        assertEquals(1, store.storeCalls);
+        assertFalse(notificationCancelled.get());
     }
 
     @Test
@@ -166,7 +336,13 @@ public final class UpdateCheckerTest {
         AtomicBoolean notificationCancelled = new AtomicBoolean();
         UpdateChecker checker = checker(
                 installedAppSource(),
-                (installedVersionCode, packageName, channel, deviceSdk) -> null,
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> null,
                 store,
                 notificationCancelled
         );
@@ -187,7 +363,13 @@ public final class UpdateCheckerTest {
         FakeReleaseStore store = new FakeReleaseStore(null, false);
         UpdateChecker checker = checker(
                 installedAppSource(),
-                (installedVersionCode, packageName, channel, deviceSdk) -> fetchedRelease,
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> fetchedRelease,
                 store,
                 new AtomicBoolean()
         );
@@ -202,6 +384,36 @@ public final class UpdateCheckerTest {
     }
 
     @Test
+    public void replacementStoreFailurePreservesStoredReleaseAndNotification() {
+        UpdateRelease storedRelease = release(7L);
+        UpdateRelease fetchedRelease = release(6L);
+        FakeReleaseStore store = new FakeReleaseStore(storedRelease, false);
+        AtomicBoolean notificationCancelled = new AtomicBoolean();
+        UpdateChecker checker = checker(
+                installedAppSource(),
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> fetchedRelease,
+                store,
+                notificationCancelled
+        );
+
+        UpdateChecker.Result result = checker.check();
+
+        assertSame(UpdateChecker.Status.RETRYABLE_FAILURE, result.getStatus());
+        assertSame(fetchedRelease, result.getCheckedRelease());
+        assertSame(storedRelease, result.getAvailableRelease());
+        assertSame(storedRelease, store.release);
+        assertEquals(0, store.clearCalls);
+        assertEquals(1, store.storeCalls);
+        assertFalse(notificationCancelled.get());
+    }
+
+    @Test
     public void completionKeepsSharedLockUntilTransactionFinishes() throws Exception {
         CountDownLatch firstCompletionEntered = new CountDownLatch(1);
         CountDownLatch releaseFirstCompletion = new CountDownLatch(1);
@@ -213,13 +425,25 @@ public final class UpdateCheckerTest {
 
         UpdateChecker firstChecker = checker(
                 installedAppSource(),
-                (installedVersionCode, packageName, channel, deviceSdk) -> null,
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> null,
                 new FakeReleaseStore(null, true),
                 new AtomicBoolean()
         );
         UpdateChecker secondChecker = checker(
                 installedAppSource(),
-                (installedVersionCode, packageName, channel, deviceSdk) -> {
+                (
+                        installedVersionCode,
+                        installedVersionName,
+                        packageName,
+                        channel,
+                        deviceSdk
+                ) -> {
                     secondReleaseSourceEntered.countDown();
                     return null;
                 },
@@ -284,6 +508,7 @@ public final class UpdateCheckerTest {
     private static UpdateChecker.InstalledAppSource installedAppSource() {
         return () -> new UpdateChecker.InstalledApp(
                 INSTALLED_VERSION_CODE,
+                INSTALLED_VERSION_NAME,
                 PACKAGE_NAME,
                 UpdateChannel.PREVIEW,
                 DEVICE_SDK
@@ -291,13 +516,18 @@ public final class UpdateCheckerTest {
     }
 
     private static UpdateRelease release(long versionCode) {
+        return release(versionCode, "Plyvanta/Plyvanta");
+    }
+
+    private static UpdateRelease release(long versionCode, String repository) {
         String versionName = "9.0.0-debug." + versionCode;
         return new UpdateRelease(
                 versionCode,
                 versionName,
-                "https://github.com/Plyvanta/Plyvanta/releases/download/v"
+                repository,
+                "https://github.com/" + repository + "/releases/download/v"
                         + versionName + "/Plyvanta-" + versionName + ".apk",
-                "https://github.com/Plyvanta/Plyvanta/releases/tag/v" + versionName,
+                "https://github.com/" + repository + "/releases/tag/v" + versionName,
                 SHA256
         );
     }

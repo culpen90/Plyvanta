@@ -54,7 +54,9 @@ SHA256SUMS
 Publishing makes the release and tag immutable. The job then verifies GitHub's
 signed release attestation, downloads all three assets, compares them byte for
 byte with the packaged files, reruns the package checks, and confirms the
-published digests.
+published digests. The updater and post-publication verifier anchor repository
+trust to immutable GitHub repository ID `1313062669`; an owner or repository
+rename must not be handled by replacing one hard-coded slug with another.
 
 ## One-time GitHub setup
 
@@ -63,9 +65,11 @@ identity. Do not use a newly generated key: Android updates must be signed by
 the same certificate as `v1.0.0`.
 
 Before Semantic Release can analyze or create a tag, the workflow verifies that
-it is running in `Plyvanta/Plyvanta` on `main`, that all four signing secrets are
-present, and that the latest stable release is published and immutable. A
-missing control fails the job before publication starts. The workflow token
+it is running on `main`, resolves GitHub repository ID `1313062669`, requires
+the workflow repository to match that ID's canonical owner/name, and passes the
+resolved Git URL to Semantic Release. It also verifies that all four signing
+secrets are present and the latest stable release is published and immutable.
+A missing control fails the job before publication starts. The workflow token
 cannot read the repository's administration-only immutability setting itself,
 so the new release is checked again immediately after publication.
 
@@ -134,7 +138,7 @@ To exercise the next-version package locally with the protected macOS signing
 setup:
 
 ```sh
-scripts/package-semantic-release.sh 1.2.0
+scripts/package-semantic-release.sh 1.2.1
 ```
 
 This produces and verifies ignored build outputs only. It does not create a tag

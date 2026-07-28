@@ -20,12 +20,15 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/.." && pwd)
 expected_commit=${GITHUB_SHA:-$(git -C "$repository_root" rev-parse HEAD)}
 repository=${GITHUB_REPOSITORY:-}
-[[ "$repository" == Plyvanta/Plyvanta ]] ||
-    fail "Release recovery is restricted to Plyvanta/Plyvanta."
+[[ "$repository" =~ ^[^/]+/[^/]+$ ]] ||
+    fail "GITHUB_REPOSITORY must identify the production repository."
 [[ "${GITHUB_REF:-refs/heads/main}" == refs/heads/main ]] ||
     fail "Release recovery is restricted to refs/heads/main."
 [[ -n "${GH_TOKEN:-}" ]] ||
     fail "GH_TOKEN is required to verify or recover a release."
+repository=$(
+    "$script_dir/resolve-trusted-repository.sh" "$repository"
+) || fail "Release recovery is restricted to the trusted Plyvanta repository ID."
 stable_tags=$(
     git -C "$repository_root" tag --points-at "$expected_commit" |
         grep -E '^v[1-9][0-9]*\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||

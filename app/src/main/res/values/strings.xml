@@ -51,6 +51,7 @@
     <string name="checking">Checking…</string>
     <string name="update_check_up_to_date">Plyvanta is up to date.</string>
     <string name="check_again">Check again</string>
+    <string name="update_check_unverified">A newer release exists, but Plyvanta couldn’t verify it. Try again later or use the official GitHub Releases page.</string>
     <string name="update_check_error">Couldn’t check for updates. Check your connection and try again.</string>
     <string name="try_again">Try again</string>
     <string name="update_available">Update available</string>
@@ -59,6 +60,8 @@
     <string name="update_dialog_title">Plyvanta %1$s is available</string>
     <string name="update_dialog_message">Download the compatible APK from the official Plyvanta GitHub release. Android may ask which browser to use and whether it can install apps.</string>
     <string name="download_update">Download update</string>
+    <string name="update_download_verifying">Verifying this update with GitHub…</string>
+    <string name="update_download_verification_error">Couldn’t verify this update. Check your connection and try again.</string>
     <string name="later">Later</string>
     <string name="no_app_for_update">No app is available to download this update.</string>
     <string name="update_notification_channel">App updates</string>

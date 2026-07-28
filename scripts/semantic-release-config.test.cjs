@@ -1,15 +1,27 @@
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
-const { readFileSync } = require("node:fs");
+const {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
 const repositoryRoot = path.resolve(__dirname, "..");
+const releaseConfigPath = path.join(
+  repositoryRoot,
+  "release.config.cjs",
+);
 const releaseWorkflow = readFileSync(
   path.join(repositoryRoot, ".github", "workflows", "release.yml"),
   "utf8",
 );
-const releaseConfig = require(path.join(repositoryRoot, "release.config.cjs"));
+const releaseConfig = loadReleaseConfig();
 const pluginEntries = new Map(
   releaseConfig.plugins.map((plugin) => (
     Array.isArray(plugin) ? [plugin[0], plugin[1]] : [plugin, {}]
@@ -24,6 +36,29 @@ const versionCodeScript = path.join(
   "scripts",
   "semantic-version-code.sh",
 );
+
+function loadReleaseConfig(repositoryOverride) {
+  const environmentName = "PLYVANTA_RELEASE_REPOSITORY";
+  const previousValue = process.env[environmentName];
+  const previouslyPresent = Object.hasOwn(process.env, environmentName);
+  if (repositoryOverride === undefined) {
+    delete process.env[environmentName];
+  } else {
+    process.env[environmentName] = repositoryOverride;
+  }
+  delete require.cache[require.resolve(releaseConfigPath)];
+
+  try {
+    return require(releaseConfigPath);
+  } finally {
+    delete require.cache[require.resolve(releaseConfigPath)];
+    if (previouslyPresent) {
+      process.env[environmentName] = previousValue;
+    } else {
+      delete process.env[environmentName];
+    }
+  }
+}
 
 async function releaseType(message) {
   const { analyzeCommits } = await import("@semantic-release/commit-analyzer");
@@ -68,6 +103,96 @@ async function releaseNotes(messages) {
     },
   );
 }
+
+test("release repository override uses the canonical HTTPS Git URL", () => {
+  const config = loadReleaseConfig("Renamed-Org/Plyvanta.App_2");
+
+  assert.equal(
+    config.repositoryUrl,
+    "https://github.com/Renamed-Org/Plyvanta.App_2.git",
+  );
+});
+
+test("absent repository override preserves the package.json fallback", () => {
+  assert.equal(Object.hasOwn(releaseConfig, "repositoryUrl"), false);
+});
+
+test("invalid release repository overrides are rejected", () => {
+  for (const repository of [
+    "",
+    "Plyvanta",
+    "Plyvanta/Plyvanta/extra",
+    "Plyvanta/..",
+    "Plyvanta/Ply vanta",
+    "Plyvanta/Plyvanta?ref=main",
+    "https://github.com/Plyvanta/Plyvanta",
+    "Plyvanta/Plyvanta\nINJECTED=value",
+  ]) {
+    assert.throws(
+      () => loadReleaseConfig(repository),
+      /must be a canonical owner\/repository name/,
+      repository,
+    );
+  }
+});
+
+test("release preflight propagates the resolved trusted repository", () => {
+  const temporaryDirectory = mkdtempSync(
+    path.join(os.tmpdir(), "plyvanta-release-preflight-"),
+  );
+  try {
+    const fakeBin = path.join(temporaryDirectory, "bin");
+    const fakeGitHub = path.join(fakeBin, "gh");
+    const githubEnvironment = path.join(temporaryDirectory, "github-env");
+    mkdirSync(fakeBin);
+    writeFileSync(
+      fakeGitHub,
+      `#!/usr/bin/env bash
+set -euo pipefail
+case "\${2:-}" in
+  repositories/1313062669)
+    printf '%s\\n' '{"id":1313062669,"full_name":"Renamed-Org/Plyvanta"}'
+    ;;
+  repos/Renamed-Org/Plyvanta/releases/latest)
+    printf 'false\\tfalse\\ttrue\\n'
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`,
+    );
+    chmodSync(fakeGitHub, 0o755);
+
+    execFileSync(
+      path.join(repositoryRoot, "scripts", "verify-release-preconditions.sh"),
+      [],
+      {
+        cwd: repositoryRoot,
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}:${process.env.PATH}`,
+          GITHUB_ENV: githubEnvironment,
+          GITHUB_REF: "refs/heads/main",
+          GITHUB_REPOSITORY: "Renamed-Org/Plyvanta",
+          GH_TOKEN: "test-token",
+          PLYVANTA_RELEASE_STORE_BASE64: "test-store",
+          PLYVANTA_RELEASE_STORE_PASSWORD: "test-password",
+          PLYVANTA_RELEASE_KEY_ALIAS: "test-alias",
+          PLYVANTA_RELEASE_KEY_PASSWORD: "test-password",
+        },
+        stdio: "pipe",
+      },
+    );
+
+    assert.equal(
+      readFileSync(githubEnvironment, "utf8"),
+      "PLYVANTA_RELEASE_REPOSITORY=Renamed-Org/Plyvanta\n",
+    );
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
 
 test("release configuration keeps the guarded main-branch pipeline", () => {
   assert.deepEqual(releaseConfig.branches, ["main"]);

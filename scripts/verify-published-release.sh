@@ -30,12 +30,16 @@ else
     version_code=$("$script_dir/semantic-version-code.sh" "$release_version")
 fi
 stable_certificate_sha256=2085e2b0c5bbd6273203f2aa0064b0f6f291a43746f9989dd0cea30e6cec4d8e
+trusted_repository_id=1313062669
 repository=${GITHUB_REPOSITORY:-}
 if [[ -z "$repository" ]]; then
     repository=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 fi
 [[ "$repository" =~ ^[^/]+/[^/]+$ ]] ||
     fail "Could not determine the GitHub repository."
+repository=$(
+    "$script_dir/resolve-trusted-repository.sh" "$repository"
+) || fail "Release verification is restricted to the trusted Plyvanta repository ID."
 
 apk_name="Plyvanta-$release_version.apk"
 metadata_name="Plyvanta-$release_version-update.json"
@@ -71,7 +75,9 @@ trap cleanup EXIT
 
 release_ready=false
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
-    if gh api "repos/$repository/releases/tags/$release_tag" > "$release_json" &&
+    if gh api \
+        "repositories/$trusted_repository_id/releases/tags/$release_tag" \
+        > "$release_json" &&
         jq -e '.draft == false and .immutable == true' "$release_json" >/dev/null
     then
         release_ready=true
@@ -118,7 +124,9 @@ remote_tag_commit=$(
 )
 [[ "$remote_tag_commit" == "$expected_commit" ]] ||
     fail "Remote release tag resolves to $remote_tag_commit; expected $expected_commit."
-latest_tag=$(gh api "repos/$repository/releases/latest" --jq .tag_name)
+latest_tag=$(
+    gh api "repositories/$trusted_repository_id/releases/latest" --jq .tag_name
+)
 [[ "$latest_tag" == "$release_tag" ]] ||
     fail "Latest stable GitHub release is '$latest_tag'; expected '$release_tag'."
 
