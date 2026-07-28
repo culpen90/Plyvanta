@@ -25,8 +25,9 @@ automation.
 ## Project scope
 
 Plyvanta is an unofficial, standalone player for supported public YouTube
-videos. It resolves direct media streams, plays them with AndroidX Media3, and
-uses read-only SponsorBlock data to skip selected in-video segments.
+videos and playlists. It resolves direct media streams, plays them with
+AndroidX Media3, and uses read-only SponsorBlock data to skip selected in-video
+segments.
 
 Changes should preserve these boundaries:
 
@@ -62,8 +63,8 @@ A useful bug report includes:
 - concise steps that reproduce the problem;
 - what you expected and what happened instead;
 - whether the problem is consistent or intermittent; and
-- a public example video URL only when it is necessary and you are comfortable
-  sharing it.
+- a public example video, playlist, or Mix URL only when it is necessary and
+  you are comfortable sharing it.
 
 Do not post credentials, account data, device identifiers, raw unreviewed logs,
 or expiring direct media URLs. If a small log excerpt is essential, remove

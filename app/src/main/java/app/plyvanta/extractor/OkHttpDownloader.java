@@ -6,10 +6,15 @@ import org.schabi.newpipe.extractor.downloader.Response;
 import org.schabi.newpipe.extractor.exceptions.ReCaptchaException;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
+import okhttp3.Call;
+import okhttp3.Callback;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.RequestBody;
@@ -27,6 +32,7 @@ public final class OkHttpDownloader extends Downloader {
 
     public OkHttpDownloader() {
         client = new OkHttpClient.Builder()
+                .callTimeout(30, TimeUnit.SECONDS)
                 .connectTimeout(12, TimeUnit.SECONDS)
                 .readTimeout(20, TimeUnit.SECONDS)
                 .writeTimeout(20, TimeUnit.SECONDS)
@@ -70,16 +76,56 @@ public final class OkHttpDownloader extends Downloader {
             builder.method(method, body);
         }
 
-        try (okhttp3.Response response = client.newCall(builder.build()).execute()) {
-            ResponseBody responseBody = response.body();
-            String body = responseBody == null ? "" : responseBody.string();
-            return new Response(
-                    response.code(),
-                    response.message(),
-                    response.headers().toMultimap(),
-                    body,
-                    response.request().url().toString()
-            );
+        Call call = client.newCall(builder.build());
+        CompletableFuture<Response> responseFuture = new CompletableFuture<>();
+        call.enqueue(new Callback() {
+            @Override
+            public void onFailure(Call failedCall, IOException exception) {
+                responseFuture.completeExceptionally(exception);
+            }
+
+            @Override
+            public void onResponse(Call completedCall, okhttp3.Response response) {
+                Response mappedResponse;
+                try (okhttp3.Response closeableResponse = response) {
+                    ResponseBody responseBody = closeableResponse.body();
+                    String body = responseBody == null ? "" : responseBody.string();
+                    mappedResponse = new Response(
+                            closeableResponse.code(),
+                            closeableResponse.message(),
+                            closeableResponse.headers().toMultimap(),
+                            body,
+                            closeableResponse.request().url().toString()
+                    );
+                } catch (Throwable exception) {
+                    responseFuture.completeExceptionally(exception);
+                    return;
+                }
+                responseFuture.complete(mappedResponse);
+            }
+        });
+
+        try {
+            return responseFuture.get();
+        } catch (InterruptedException exception) {
+            call.cancel();
+            Thread.currentThread().interrupt();
+            InterruptedIOException interrupted =
+                    new InterruptedIOException("Interrupted while waiting for HTTP response");
+            interrupted.initCause(exception);
+            throw interrupted;
+        } catch (ExecutionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof IOException) {
+                throw (IOException) cause;
+            }
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            if (cause instanceof Error) {
+                throw (Error) cause;
+            }
+            throw new IOException("HTTP request failed", cause);
         }
     }
 }

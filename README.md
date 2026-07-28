@@ -1,10 +1,10 @@
 # Plyvanta
 
-Plyvanta is an unofficial Android video player for watching a YouTube link without
-the interruptions normally added around the video. It resolves a direct,
-content-only media stream instead of embedding the official YouTube player, then
-uses community-maintained SponsorBlock timestamps to skip sponsored sections
-inside the video.
+Plyvanta is an unofficial Android video player for watching a YouTube video or
+public playlist without the interruptions normally added around each video. It
+resolves direct, content-only media streams instead of embedding the official
+YouTube player, then uses community-maintained SponsorBlock timestamps to skip
+sponsored sections inside each video.
 
 Plyvanta does not modify the YouTube app and is not a system-wide ad blocker.
 Playback must happen inside Plyvanta.
@@ -33,9 +33,11 @@ user to allow notifications.
 
 ## What it does
 
-- Accepts a YouTube URL pasted into the app.
+- Accepts a YouTube video or public-playlist URL pasted into the app.
 - Opens links shared from another Android app, including YouTube.
 - Handles supported YouTube links opened through Android's link chooser.
+- Preserves playlist order, starts at a shared video occurrence, advances
+  automatically, and provides **Previous** and **Next** controls.
 - Plays progressive, separate audio/video, HLS, or DASH media with AndroidX
   Media3.
 - Avoids the ad slots used by the official player by requesting the video's
@@ -53,15 +55,23 @@ reminders, intros, and outros can be enabled from **Settings**.
 ## Use
 
 1. Install and open Plyvanta.
-2. Paste a YouTube video URL and tap **Play**.
+2. Paste a YouTube video or public-playlist URL and tap **Play**.
 
 Alternatively, choose **Share** in YouTube or another app, then select Plyvanta.
 You can also select Plyvanta when Android asks which app should open a supported
 YouTube link.
 
-Plyvanta resolves the link, starts the direct media stream, and loads the
-available SponsorBlock segments independently. When an enabled segment is
-reached, playback seeks to its end and briefly offers **Undo**.
+For a playlist, Plyvanta shows its name and the current position, then plays
+each available video in order. Use **Previous** or **Next** to move through the
+queue. A shared watch link carrying playlist context starts at that video; an
+accompanying index disambiguates duplicate occurrences. A playlist-only index
+is not used because unavailable entries may be omitted before Plyvanta receives
+the public queue.
+
+Plyvanta resolves each video only when it is ready to play, starts its direct
+media stream, and loads the available SponsorBlock segments independently. When
+an enabled segment is reached, playback seeks to its end and briefly offers
+**Undo**.
 
 To report a problem, open **Settings → Report a bug**. The support action and
 installed app version appear at the top of Settings so the active build can be
@@ -93,14 +103,14 @@ previews cannot be confused. It also writes the release metadata that future
 installed versions require before trusting an update:
 
 ```text
-app/build/outputs/preview/Plyvanta-1.1.0-debug.4.apk
-app/build/outputs/preview/Plyvanta-1.1.0-debug.4-update.json
+app/build/outputs/preview/Plyvanta-1.2.0-debug.4.apk
+app/build/outputs/preview/Plyvanta-1.2.0-debug.4-update.json
 ```
 
 Install it on a connected device or emulator with:
 
 ```sh
-adb install -r app/build/outputs/preview/Plyvanta-1.1.0-debug.4.apk
+adb install -r app/build/outputs/preview/Plyvanta-1.2.0-debug.4.apk
 ```
 
 With one emulator or device connected, verify the exact packaged artifact before
@@ -108,8 +118,8 @@ distribution:
 
 ```sh
 scripts/smoke-test-apk.sh \
-  app/build/outputs/preview/Plyvanta-1.1.0-debug.4.apk \
-  app/build/outputs/preview/Plyvanta-1.1.0-debug.4-update.json \
+  app/build/outputs/preview/Plyvanta-1.2.0-debug.4.apk \
+  app/build/outputs/preview/Plyvanta-1.2.0-debug.4-update.json \
   f316b684e87b4df6deb4c9fc987e530e7c3fae9810e6a3371b0cc0ea05f179f1
 ```
 
@@ -156,8 +166,8 @@ The task refuses a partially configured signing identity and writes the three
 upload-ready assets to:
 
 ```text
-app/build/outputs/stable/Plyvanta-1.1.0.apk
-app/build/outputs/stable/Plyvanta-1.1.0-update.json
+app/build/outputs/stable/Plyvanta-1.2.0.apk
+app/build/outputs/stable/Plyvanta-1.2.0-update.json
 app/build/outputs/stable/SHA256SUMS
 ```
 
@@ -165,8 +175,8 @@ Before distribution, install and exercise the exact packaged artifact:
 
 ```sh
 scripts/smoke-test-apk.sh \
-  app/build/outputs/stable/Plyvanta-1.1.0.apk \
-  app/build/outputs/stable/Plyvanta-1.1.0-update.json \
+  app/build/outputs/stable/Plyvanta-1.2.0.apk \
+  app/build/outputs/stable/Plyvanta-1.2.0-update.json \
   2085e2b0c5bbd6273203f2aa0064b0f6f291a43746f9989dd0cea30e6cec4d8e
 ```
 
@@ -191,8 +201,13 @@ Plyvanta is a single-activity Java Android app:
 
 - `MainActivity` owns the link/share UI, player lifecycle, fullscreen mode,
   settings, playback recovery, and sponsor-skip feedback.
-- `YouTubeUrlParser` accepts only trusted YouTube hosts and supported video URL
-  forms, then converts them to a canonical watch URL.
+- `YouTubeUrlParser` accepts only trusted YouTube hosts and supported video or
+  playlist forms, then returns a typed canonical source.
+- `NewPipePlaylistResolver` reads public playlist metadata and stable video-page
+  references, preserving order and intentional duplicates across continuation
+  pages.
+- `PlaylistQueue` chooses the shared starting occurrence and owns deterministic
+  Previous/Next positioning. Direct media URLs are never stored in the queue.
 - `NewPipeVideoResolver` uses NewPipe Extractor to obtain public video metadata
   and direct media URLs. It selects a progressive stream when available,
   otherwise separate audio/video, HLS, or DASH.
@@ -230,11 +245,13 @@ video quality, whether the update-notification explanation or permission request
 has been shown, the last version that produced an alert, a random private token
 used only to authenticate notification navigation, and the validated metadata
 for a currently available update in local Android preferences. WorkManager also
-keeps its scheduling state in the app's private database. A currently playing
-URL and position may be retained temporarily by Android to restore the activity
-after a configuration or process-state change; they are not presented as
-history. Android cloud backup and device-to-device transfer are disabled for
-Plyvanta's app data.
+keeps its scheduling state in the app's private database. A current source URL,
+playlist position, video ID, and playback position may be retained temporarily
+by Android to restore the activity after a configuration or process-state
+change; they are not presented as history. The playlist queue otherwise remains
+in memory and contains only public page metadata, never direct media URLs.
+Android cloud backup and device-to-device transfer are disabled for Plyvanta's
+app data.
 
 Bug reports are entirely user-initiated. Plyvanta creates the report locally and
 shows its full text before handing anything to another app or website. Technical
@@ -265,10 +282,12 @@ user chose to include and handles it under its own privacy practices.
 
 Playing a link makes these network requests:
 
-- **YouTube and its media hosts:** NewPipe Extractor requests public page/player
-  metadata, and Media3 requests the selected direct stream. YouTube and its
-  delivery providers therefore receive the network address and ordinary request
-  metadata needed to serve the video.
+- **YouTube and its media hosts:** For a playlist, NewPipe Extractor first
+  requests its public metadata and continuation pages. It then requests each
+  selected video's public page/player metadata only when that item is ready to
+  play, and Media3 requests the selected direct stream. YouTube and its delivery
+  providers therefore receive the network address and ordinary request metadata
+  needed to serve the playlist and videos.
 - **SponsorBlock:** Plyvanta computes the SHA-256 hash of the video ID and sends
   only the first four hexadecimal characters to SponsorBlock's hash-prefix API.
   This places the lookup in a bucket with other video IDs. The full hash is
@@ -298,6 +317,13 @@ can still observe requests according to their own privacy practices.
   working until NewPipe Extractor or Plyvanta is updated.
 - Private, members-only, paid, DRM-protected, sign-in-required, and
   age-restricted videos are not supported. Region restrictions still apply.
+- Private and sign-in-required playlists such as Watch Later are not supported.
+  Known unavailable entries are omitted. If a later continuation page fails,
+  repeats, or reaches the 100-page safety limit, the entries already loaded
+  remain playable and the app labels the queue as partial.
+- YouTube Mixes can continue indefinitely, so one load is bounded to 200
+  playable entries or 20 pages. Some regions require YouTube consent before a
+  Mix can be viewed, which Plyvanta cannot provide without signing in.
 - Some live streams or uncommon media formats may not resolve or play.
 - Sponsor skipping depends on community submissions. A video may have no
   segments, incomplete segments, or inaccurate timing.
