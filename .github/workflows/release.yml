@@ -16,7 +16,7 @@ permissions: {}
 jobs:
   verify:
     name: Verify
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     permissions:
       contents: read
@@ -65,7 +65,7 @@ jobs:
     name: Publish
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: verify
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: release
     permissions:
