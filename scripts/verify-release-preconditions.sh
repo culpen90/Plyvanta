@@ -13,8 +13,8 @@ command -v gh >/dev/null 2>&1 ||
     fail "GitHub CLI is required for release preflight checks."
 
 repository=${GITHUB_REPOSITORY:-}
-[[ "$repository" == culpen90/Plyvanta ]] ||
-    fail "Production releases are restricted to culpen90/Plyvanta."
+[[ "$repository" == Plyvanta/Plyvanta ]] ||
+    fail "Production releases are restricted to Plyvanta/Plyvanta."
 [[ "${GITHUB_REF:-}" == refs/heads/main ]] ||
     fail "Production releases are restricted to refs/heads/main."
 [[ -n "${GH_TOKEN:-}" ]] ||

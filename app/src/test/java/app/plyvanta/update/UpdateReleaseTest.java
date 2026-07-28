@@ -12,10 +12,10 @@ public final class UpdateReleaseTest {
     private static final String SHA256 =
             "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
     private static final String APK_URL =
-            "https://github.com/culpen90/Plyvanta/releases/download/"
+            "https://github.com/Plyvanta/Plyvanta/releases/download/"
                     + "v1.0.0-debug.5/Plyvanta-1.0.0-debug.5.apk";
     private static final String RELEASE_URL =
-            "https://github.com/culpen90/Plyvanta/releases/tag/v1.0.0-debug.5";
+            "https://github.com/Plyvanta/Plyvanta/releases/tag/v1.0.0-debug.5";
 
     @Test
     public void comparesUsingMonotonicAndroidVersionCode() {
@@ -80,7 +80,7 @@ public final class UpdateReleaseTest {
                 () -> new UpdateRelease(
                         5,
                         "1.0.0-debug.5",
-                        APK_URL.replace("/culpen90/Plyvanta/", "/attacker/Plyvanta/"),
+                        APK_URL.replace("/Plyvanta/Plyvanta/", "/attacker/Plyvanta/"),
                         RELEASE_URL,
                         SHA256
                 )

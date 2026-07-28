@@ -295,9 +295,9 @@ public final class UpdateCheckerTest {
         return new UpdateRelease(
                 versionCode,
                 versionName,
-                "https://github.com/culpen90/Plyvanta/releases/download/v"
+                "https://github.com/Plyvanta/Plyvanta/releases/download/v"
                         + versionName + "/Plyvanta-" + versionName + ".apk",
-                "https://github.com/culpen90/Plyvanta/releases/tag/v" + versionName,
+                "https://github.com/Plyvanta/Plyvanta/releases/tag/v" + versionName,
                 SHA256
         );
     }

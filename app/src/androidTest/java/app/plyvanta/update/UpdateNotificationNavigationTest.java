@@ -112,10 +112,10 @@ public final class UpdateNotificationNavigationTest {
         UpdateRelease release = new UpdateRelease(
                 offeredVersionCode,
                 offeredVersionName,
-                "https://github.com/culpen90/Plyvanta/releases/download/"
+                "https://github.com/Plyvanta/Plyvanta/releases/download/"
                         + "v" + offeredVersionName + "/Plyvanta-"
                         + offeredVersionName + ".apk",
-                "https://github.com/culpen90/Plyvanta/releases/tag/v"
+                "https://github.com/Plyvanta/Plyvanta/releases/tag/v"
                         + offeredVersionName,
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         );

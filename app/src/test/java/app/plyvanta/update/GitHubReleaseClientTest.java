@@ -55,7 +55,7 @@ public final class GitHubReleaseClientTest {
         assertEquals(5L, update.getVersionCode());
         assertEquals("1.0.0-debug.5", update.getVersionName());
         assertEquals(
-                "https://github.com/culpen90/Plyvanta/releases/download/"
+                "https://github.com/Plyvanta/Plyvanta/releases/download/"
                         + "v1.0.0-debug.5/Plyvanta-1.0.0-debug.5.apk",
                 update.getApkUrl()
         );
@@ -90,7 +90,7 @@ public final class GitHubReleaseClientTest {
         assertEquals(4L, update.getVersionCode());
         assertEquals("1.0.0", update.getVersionName());
         assertEquals(
-                "https://github.com/culpen90/Plyvanta/releases/download/"
+                "https://github.com/Plyvanta/Plyvanta/releases/download/"
                         + "v1.0.0/Plyvanta-1.0.0.apk",
                 update.getApkUrl()
         );
@@ -327,7 +327,7 @@ public final class GitHubReleaseClientTest {
         );
         String forgedAssets = standardAssets("1.0.0-debug.5", SHA256)
                 .replace(
-                        "https://github.com/culpen90/Plyvanta/releases/download/"
+                        "https://github.com/Plyvanta/Plyvanta/releases/download/"
                                 + "v1.0.0-debug.5/Plyvanta-1.0.0-debug.5.apk",
                         "https://example.com/Plyvanta-1.0.0-debug.5.apk"
                 );
@@ -418,7 +418,7 @@ public final class GitHubReleaseClientTest {
                 + "\"prerelease\":" + prerelease + ","
                 + "\"immutable\":true,"
                 + "\"tag_name\":\"" + tag + "\","
-                + "\"html_url\":\"https://github.com/culpen90/Plyvanta/releases/tag/"
+                + "\"html_url\":\"https://github.com/Plyvanta/Plyvanta/releases/tag/"
                 + tag + "\","
                 + "\"assets\":[" + assets + "]"
                 + "}]";
@@ -426,7 +426,7 @@ public final class GitHubReleaseClientTest {
 
     private static String standardAssets(String versionName, String digest) {
         String tag = "v" + versionName;
-        String base = "https://github.com/culpen90/Plyvanta/releases/download/"
+        String base = "https://github.com/Plyvanta/Plyvanta/releases/download/"
                 + tag + "/";
         return asset(
                 "Plyvanta-" + versionName + "-update.json",

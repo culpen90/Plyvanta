@@ -63,7 +63,7 @@ identity. Do not use a newly generated key: Android updates must be signed by
 the same certificate as `v1.0.0`.
 
 Before Semantic Release can analyze or create a tag, the workflow verifies that
-it is running in `culpen90/Plyvanta` on `main`, that all four signing secrets are
+it is running in `Plyvanta/Plyvanta` on `main`, that all four signing secrets are
 present, and that the latest stable release is published and immutable. A
 missing control fails the job before publication starts. The workflow token
 cannot read the repository's administration-only immutability setting itself,
@@ -85,7 +85,7 @@ base64 string. For example:
 ```sh
 openssl base64 -A -in /path/to/plyvanta-release.p12 |
   gh secret set PLYVANTA_RELEASE_STORE_BASE64 \
-    --repo culpen90/Plyvanta \
+    --repo Plyvanta/Plyvanta \
     --env release
 ```
 
@@ -154,7 +154,7 @@ stranded draft or failed publication cannot be hidden by a successful no-op.
 Inspect both before changing anything:
 
 ```sh
-gh release view vX.Y.Z --repo culpen90/Plyvanta
+gh release view vX.Y.Z --repo Plyvanta/Plyvanta
 git ls-remote --tags origin vX.Y.Z
 ```
 

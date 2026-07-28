@@ -28,7 +28,7 @@ public final class GitHubReleaseClient {
     static final int MAX_ASSETS_PER_RELEASE = 100;
 
     private static final String RELEASES_API_URL =
-            "https://api.github.com/repos/culpen90/Plyvanta/releases?per_page=100";
+            "https://api.github.com/repos/Plyvanta/Plyvanta/releases?per_page=100";
     private static final String USER_AGENT = "Plyvanta-Update-Checker/1 (Android)";
     private static final String APK_CONTENT_TYPE =
             "application/vnd.android.package-archive";

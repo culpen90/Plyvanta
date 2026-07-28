@@ -138,7 +138,7 @@ External contributors can fork the repository and add the main repository as
 ```sh
 git clone https://github.com/YOUR-ACCOUNT/Plyvanta.git
 cd Plyvanta
-git remote add upstream https://github.com/culpen90/Plyvanta.git
+git remote add upstream https://github.com/Plyvanta/Plyvanta.git
 git switch -c fix/short-description  # Example topic-branch name
 ./gradlew assembleDebug
 ```
@@ -266,7 +266,7 @@ must preserve all of the following.
 ### Updates and exported entry points
 
 - Keep update checks anonymous, read-only, bounded, and restricted to
-  `culpen90/Plyvanta`.
+  `Plyvanta/Plyvanta`.
 - Do not weaken validation of release immutability, package name, channel,
   semantic tag, increasing `versionCode`, minimum SDK, asset filename, official
   GitHub URL, update metadata, or SHA-256.
@@ -538,4 +538,4 @@ people, respect privacy, and avoid discriminatory, harassing, or disruptive
 behavior. Assume good intent while remaining open to evidence and correction.
 
 [conventional-commits]: https://www.conventionalcommits.org/en/v1.0.0/
-[issues]: https://github.com/culpen90/Plyvanta/issues
+[issues]: https://github.com/Plyvanta/Plyvanta/issues

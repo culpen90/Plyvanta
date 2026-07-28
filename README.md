@@ -12,7 +12,7 @@ Playback must happen inside Plyvanta.
 ## Download
 
 Production-signed stable builds are available from
-[GitHub Releases](https://github.com/culpen90/Plyvanta/releases). Download the
+[GitHub Releases](https://github.com/Plyvanta/Plyvanta/releases). Download the
 APK from the latest non-prerelease release.
 
 Debug previews use the separate package `app.plyvanta.debug`. The stable app is
@@ -296,7 +296,7 @@ Playing a link makes these network requests:
   SponsorBlock request is made when every skip category is disabled.
 
 Separately, WorkManager periodically makes an anonymous, read-only request to
-the public **GitHub Releases API** for `culpen90/Plyvanta`. Choosing
+the public **GitHub Releases API** for `Plyvanta/Plyvanta`. Choosing
 **Settings → Check for updates now** explicitly initiates the same anonymous
 GitHub requests. When a release contains the required update metadata, Plyvanta
 downloads that small metadata file from GitHub and validates it locally. The

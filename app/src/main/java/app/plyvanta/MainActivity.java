@@ -109,7 +109,7 @@ public final class MainActivity extends ComponentActivity {
     private static final String STATE_BUG_REPORT_DETAIL_VALUES = "bug_report_detail_values";
     private static final String STATE_BUG_REPORT_VIDEO_URL = "bug_report_video_url";
     private static final String BUG_REPORT_URL =
-            "https://github.com/culpen90/Plyvanta/issues/new";
+            "https://github.com/Plyvanta/Plyvanta/issues/new";
     private static final int MAX_GITHUB_PREFILL_URI_CHARS = 6_000;
     private static final int BUG_REPORT_CLOSED = 0;
     private static final int BUG_REPORT_EDITING = 1;

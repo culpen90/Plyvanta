@@ -63,7 +63,7 @@ async function releaseNotes(messages) {
         version: "1.1.0",
       },
       options: {
-        repositoryUrl: "https://github.com/culpen90/Plyvanta.git",
+        repositoryUrl: "https://github.com/Plyvanta/Plyvanta.git",
       },
     },
   );

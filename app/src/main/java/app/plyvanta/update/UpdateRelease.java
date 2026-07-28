@@ -9,9 +9,9 @@ import java.util.regex.Pattern;
 public final class UpdateRelease {
     private static final String GITHUB_HOST = "github.com";
     private static final String RELEASE_DOWNLOAD_PREFIX =
-            "/culpen90/Plyvanta/releases/download/";
+            "/Plyvanta/Plyvanta/releases/download/";
     private static final String RELEASE_PAGE_PREFIX =
-            "/culpen90/Plyvanta/releases/tag/";
+            "/Plyvanta/Plyvanta/releases/tag/";
     private static final Pattern VERSION_NAME_PATTERN = Pattern.compile(
             "\\d+\\.\\d+\\.\\d+(?:-debug\\.\\d+)?"
     );

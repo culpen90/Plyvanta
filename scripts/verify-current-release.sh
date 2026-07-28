@@ -20,8 +20,8 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/.." && pwd)
 expected_commit=${GITHUB_SHA:-$(git -C "$repository_root" rev-parse HEAD)}
 repository=${GITHUB_REPOSITORY:-}
-[[ "$repository" == culpen90/Plyvanta ]] ||
-    fail "Release recovery is restricted to culpen90/Plyvanta."
+[[ "$repository" == Plyvanta/Plyvanta ]] ||
+    fail "Release recovery is restricted to Plyvanta/Plyvanta."
 [[ "${GITHUB_REF:-refs/heads/main}" == refs/heads/main ]] ||
     fail "Release recovery is restricted to refs/heads/main."
 [[ -n "${GH_TOKEN:-}" ]] ||
