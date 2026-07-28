@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Plyvanta</string>
     <string name="app_tagline">YouTube without the interruptions</string>
-    <string name="paste_link_hint">Paste a YouTube link</string>
+    <string name="paste_link_hint">Paste a YouTube video or playlist link</string>
     <string name="play">Play</string>
     <string name="paste">Paste</string>
     <string name="settings">Settings</string>
@@ -12,10 +12,27 @@
     <string name="protection_active">Protection active</string>
     <string name="direct_stream_detail">Direct playback avoids YouTube ad slots</string>
     <string name="sponsor_detail">SponsorBlock skips sponsored sections automatically</string>
+    <string name="video_player">Video player</string>
+    <string name="play_video_or_playlist">PLAY A VIDEO OR PLAYLIST</string>
+    <string name="play_prompt">Paste or share a YouTube video or playlist link</string>
+    <string name="play_prompt_detail">Plyvanta plays videos in order and skips known sponsors.</string>
     <string name="loading_video">Resolving ad-free stream…</string>
+    <string name="loading_playlist">Loading playlist…</string>
     <string name="ready">Ready</string>
-    <string name="invalid_link">Enter a valid YouTube video link.</string>
+    <string name="invalid_link">Enter a valid YouTube video or playlist link.</string>
     <string name="playback_error">This video could not be played.</string>
+    <string name="playlist">PLAYLIST</string>
+    <string name="playlist_loading_name">Loading YouTube playlist</string>
+    <string name="playlist_loading_detail">Reading the public video list…</string>
+    <string name="playlist_position">%1$d of %2$d</string>
+    <string name="playlist_position_partial">%1$d of %2$d • more may be available</string>
+    <string name="playlist_mix_position">Mix • %1$d of %2$d</string>
+    <string name="previous_video">Previous</string>
+    <string name="next_video">Next</string>
+    <string name="playlist_finished">Playlist finished</string>
+    <string name="playlist_loaded_items_finished">Loaded playlist items finished</string>
+    <string name="playlist_no_playable_videos">This playlist does not contain any playable public videos.</string>
+    <string name="playlist_continue_after_error">Use Next to continue with the playlist.</string>
     <string name="share_target_label">Play without interruptions</string>
     <string name="help_and_support">HELP &amp; SUPPORT</string>
     <string name="report_a_bug">Report a bug</string>

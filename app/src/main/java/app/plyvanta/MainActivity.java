@@ -68,10 +68,16 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import app.plyvanta.playback.NewPipePlaylistResolver;
 import app.plyvanta.playback.NewPipeVideoResolver;
+import app.plyvanta.playback.PlaybackSessionState;
 import app.plyvanta.playback.PlaybackSourceFactory;
+import app.plyvanta.playback.PlaylistEntry;
+import app.plyvanta.playback.PlaylistQueue;
+import app.plyvanta.playback.ResolvedPlaylist;
 import app.plyvanta.playback.ResolvedVideo;
 import app.plyvanta.playback.SponsorSkipController;
 import app.plyvanta.settings.PreferenceStore;
@@ -88,6 +94,9 @@ import app.plyvanta.util.YouTubeUrlParser;
 @UnstableApi
 public final class MainActivity extends ComponentActivity {
     private static final String STATE_URL = "active_url";
+    private static final String STATE_SOURCE_URL = "source_url";
+    private static final String STATE_CURRENT_VIDEO_ID = "current_video_id";
+    private static final String STATE_PLAYLIST_INDEX = "playlist_index";
     private static final String STATE_POSITION = "playback_position";
     private static final String STATE_PLAY_WHEN_READY = "play_when_ready";
     private static final String STATE_BUG_REPORT_STEP = "bug_report_step";
@@ -107,10 +116,23 @@ public final class MainActivity extends ComponentActivity {
     private static final int BUG_REPORT_REVIEWING = 2;
     private static final int REQUEST_UPDATE_NOTIFICATIONS = 1001;
 
+    private enum PlaybackStartReason {
+        USER,
+        PLAYLIST_ITEM,
+        RETRY,
+        RESTORE
+    }
+
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final ExecutorService resolverExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService videoResolverExecutor =
+            Executors.newSingleThreadExecutor();
+    private final ExecutorService playlistResolverExecutor =
+            Executors.newSingleThreadExecutor();
     private final ExecutorService updateCheckExecutor = Executors.newSingleThreadExecutor();
     private final AtomicInteger loadGeneration = new AtomicInteger();
+    private final AtomicInteger playlistLoadGeneration = new AtomicInteger();
+    private final PlaybackSessionState playbackSessionState =
+            new PlaybackSessionState();
     private final ManualUpdateCheckController manualUpdateCheckController =
             new ManualUpdateCheckController();
 
@@ -126,6 +148,11 @@ public final class MainActivity extends ComponentActivity {
     private TextView uploaderText;
     private TextView playbackStatus;
     private TextView protectionStatus;
+    private LinearLayout playlistCard;
+    private TextView playlistNameText;
+    private TextView playlistPositionText;
+    private Button playlistPreviousButton;
+    private Button playlistNextButton;
     private LinearLayout errorCard;
     private TextView errorText;
     private ProgressBar loadingIndicator;
@@ -139,13 +166,23 @@ public final class MainActivity extends ComponentActivity {
     private PreferenceStore preferenceStore;
     private UpdatePreferences updatePreferences;
     private final NewPipeVideoResolver videoResolver = new NewPipeVideoResolver();
+    private final NewPipePlaylistResolver playlistResolver =
+            new NewPipePlaylistResolver();
 
     private ResolvedVideo activeVideo;
     private String activeUrl;
+    private String sourceUrl;
+    private PlaylistQueue playlistQueue;
+    private Future<?> activeVideoResolveTask;
+    private Future<?> activePlaylistResolveTask;
     private boolean fullscreen;
     private boolean retriedAfterPlaybackFailure;
-    private long pendingSeekMs = C.TIME_UNSET;
-    private boolean pendingPlayWhenReady = true;
+    private int handledEndGeneration = -1;
+    private int preparedPlaybackGeneration = -1;
+    private long pendingSeekMs = PlaybackSessionState.NO_PENDING_SEEK;
+    private String pendingRestoreVideoId;
+    private int pendingRestorePlaylistIndex = -1;
+    private boolean selectedMediaPrepared;
     private String lastFailureStage;
     private String lastFailureType;
     private String sponsorLookupStatus = "Not requested";
@@ -197,15 +234,41 @@ public final class MainActivity extends ComponentActivity {
 
         boolean handledUpdateIntent = handleUpdateIntent(getIntent());
         if (savedInstanceState != null) {
-            activeUrl = savedInstanceState.getString(STATE_URL);
-            pendingSeekMs = savedInstanceState.getLong(STATE_POSITION, C.TIME_UNSET);
-            pendingPlayWhenReady = savedInstanceState.getBoolean(
+            String savedSourceUrl = savedInstanceState.getString(
+                    STATE_SOURCE_URL,
+                    savedInstanceState.getString(STATE_URL)
+            );
+            String savedVideoId = savedInstanceState.getString(
+                    STATE_CURRENT_VIDEO_ID
+            );
+            int savedPlaylistIndex = savedInstanceState.getInt(
+                    STATE_PLAYLIST_INDEX,
+                    -1
+            );
+            pendingSeekMs = PlaybackSessionState.restoredPosition(
+                    savedInstanceState.getLong(
+                            STATE_POSITION,
+                            PlaybackSessionState.NO_PENDING_SEEK
+                    )
+            );
+            playbackSessionState.requestPlayWhenReady(savedInstanceState.getBoolean(
                     STATE_PLAY_WHEN_READY,
                     true
-            );
-            if (activeUrl != null) {
-                linkInput.setText(activeUrl);
-                startPlayback(activeUrl, false);
+            ));
+            YouTubeUrlParser.PlayableLink savedLink =
+                    YouTubeUrlParser.parsePlayable(savedSourceUrl);
+            if (savedLink != null) {
+                pendingRestoreVideoId = savedVideoId == null
+                        ? savedLink.getVideoId()
+                        : savedVideoId;
+                pendingRestorePlaylistIndex = savedPlaylistIndex;
+                linkInput.setText(savedLink.getCanonicalUrl());
+                startPlayable(
+                        savedLink,
+                        savedPlaylistIndex,
+                        savedVideoId,
+                        PlaybackStartReason.RESTORE
+                );
             }
         } else if (!handledUpdateIntent && !handleIntent(getIntent())) {
             updateProtectionText();
@@ -255,21 +318,31 @@ public final class MainActivity extends ComponentActivity {
                 if (playbackState == Player.STATE_READY) {
                     loadingIndicator.setVisibility(View.GONE);
                     playbackStatus.setText(statusForReadyVideo());
-                    if (pendingSeekMs != C.TIME_UNSET) {
+                    if (PlaybackSessionState.hasPendingSeek(pendingSeekMs)) {
                         player.seekTo(pendingSeekMs);
-                        pendingSeekMs = C.TIME_UNSET;
-                        player.setPlayWhenReady(pendingPlayWhenReady);
+                        pendingSeekMs = PlaybackSessionState.NO_PENDING_SEEK;
                     }
+                    player.setPlayWhenReady(
+                            playbackSessionState.shouldPlayWhenReady()
+                    );
                 } else if (playbackState == Player.STATE_BUFFERING) {
                     playbackStatus.setText("Buffering…");
                 } else if (playbackState == Player.STATE_ENDED) {
-                    playbackStatus.setText("Finished");
+                    handlePlaybackEnded();
                 }
             }
 
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 playerView.setKeepScreenOn(isPlaying);
+            }
+
+            @Override
+            public void onPlayWhenReadyChanged(
+                    boolean playWhenReady,
+                    int reason
+            ) {
+                playbackSessionState.onPlayerPlayWhenReadyChanged(playWhenReady);
             }
 
             @Override
@@ -281,12 +354,11 @@ public final class MainActivity extends ComponentActivity {
                 if (!retriedAfterPlaybackFailure && activeUrl != null) {
                     retriedAfterPlaybackFailure = true;
                     pendingSeekMs = Math.max(0, player.getCurrentPosition());
-                    pendingPlayWhenReady = true;
                     playbackStatus.setText("Refreshing the stream…");
-                    startPlayback(activeUrl, true);
+                    startPlayback(activeUrl, PlaybackStartReason.RETRY);
                     return;
                 }
-                showError(humanPlaybackError(error));
+                showError(withPlaylistContinuation(humanPlaybackError(error)));
             }
         });
         playbackSourceFactory = new PlaybackSourceFactory(this);
@@ -329,22 +401,31 @@ public final class MainActivity extends ComponentActivity {
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
         info.setPadding(dp(2), dp(18), dp(2), dp(16));
-        titleText = text("Paste or share a YouTube link", 22, getColor(R.color.text_primary));
+        titleText = text(
+                getString(R.string.play_prompt),
+                22,
+                getColor(R.color.text_primary)
+        );
         titleText.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         titleText.setMaxLines(2);
         uploaderText = text(
-                "Plyvanta plays the content stream directly and skips known sponsors.",
+                getString(R.string.play_prompt_detail),
                 14,
                 getColor(R.color.text_secondary)
         );
         uploaderText.setPadding(0, dp(6), 0, 0);
         playbackStatus = text(getString(R.string.ready), 13, getColor(R.color.mint));
         playbackStatus.setPadding(0, dp(8), 0, 0);
+        playbackStatus.setAccessibilityLiveRegion(
+                View.ACCESSIBILITY_LIVE_REGION_POLITE
+        );
         info.addView(titleText);
         info.addView(uploaderText);
         info.addView(playbackStatus);
         body.addView(info);
 
+        playlistCard = buildPlaylistCard();
+        body.addView(playlistCard, spacedCardParams());
         body.addView(buildInputCard(), spacedCardParams());
         body.addView(buildProtectionCard(), spacedCardParams());
 
@@ -354,6 +435,7 @@ public final class MainActivity extends ComponentActivity {
         errorCard.setPadding(dp(16), dp(14), dp(10), dp(8));
         errorCard.setVisibility(View.GONE);
         errorText = text("", 14, Color.rgb(255, 165, 150));
+        errorText.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE);
         errorCard.addView(errorText);
         Button reportIssue = textButton(getString(R.string.report_this_issue));
         reportIssue.setOnClickListener(view -> showBugReport(true, "", false, false));
@@ -439,7 +521,7 @@ public final class MainActivity extends ComponentActivity {
         playerView.setControllerAutoShow(true);
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
         playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
-        playerView.setContentDescription("Video player");
+        playerView.setContentDescription(getString(R.string.video_player));
         container.addView(playerView, matchParent());
 
         fullscreenButton = iconButton(
@@ -464,7 +546,11 @@ public final class MainActivity extends ComponentActivity {
         card.setPadding(dp(14), dp(14), dp(14), dp(14));
         card.setBackgroundResource(R.drawable.bg_card);
 
-        TextView label = text("PLAY A VIDEO", 11, getColor(R.color.text_secondary));
+        TextView label = text(
+                getString(R.string.play_video_or_playlist),
+                11,
+                getColor(R.color.text_secondary)
+        );
         label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         label.setPadding(dp(2), 0, 0, dp(10));
         card.addView(label);
@@ -474,6 +560,8 @@ public final class MainActivity extends ComponentActivity {
         row.setGravity(Gravity.CENTER_VERTICAL);
 
         linkInput = new EditText(this);
+        linkInput.setId(View.generateViewId());
+        label.setLabelFor(linkInput.getId());
         linkInput.setHint(R.string.paste_link_hint);
         linkInput.setHintTextColor(getColor(R.color.text_secondary));
         linkInput.setTextColor(getColor(R.color.text_primary));
@@ -504,6 +592,57 @@ public final class MainActivity extends ComponentActivity {
         LinearLayout.LayoutParams pasteParams = new LinearLayout.LayoutParams(wrap(), dp(42));
         pasteParams.gravity = Gravity.END;
         card.addView(paste, pasteParams);
+        return card;
+    }
+
+    private LinearLayout buildPlaylistCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(14), dp(12), dp(10));
+        card.setBackgroundResource(R.drawable.bg_card);
+        card.setVisibility(View.GONE);
+
+        TextView label = text(
+                getString(R.string.playlist),
+                11,
+                getColor(R.color.text_secondary)
+        );
+        label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        card.addView(label);
+
+        playlistNameText = text("", 17, getColor(R.color.text_primary));
+        playlistNameText.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        playlistNameText.setPadding(0, dp(7), 0, 0);
+        playlistNameText.setMaxLines(2);
+        card.addView(playlistNameText);
+
+        playlistPositionText = text("", 13, getColor(R.color.text_secondary));
+        playlistPositionText.setPadding(0, dp(5), 0, 0);
+        playlistPositionText.setAccessibilityLiveRegion(
+                View.ACCESSIBILITY_LIVE_REGION_POLITE
+        );
+        card.addView(playlistPositionText);
+
+        LinearLayout controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.HORIZONTAL);
+        controls.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        controls.setPadding(0, dp(3), 0, 0);
+
+        playlistPreviousButton = textButton(getString(R.string.previous_video));
+        playlistPreviousButton.setOnClickListener(view -> playPreviousPlaylistItem());
+        controls.addView(
+                playlistPreviousButton,
+                new LinearLayout.LayoutParams(wrap(), dp(48))
+        );
+
+        playlistNextButton = textButton(getString(R.string.next_video));
+        playlistNextButton.setOnClickListener(view -> playNextPlaylistItem());
+        controls.addView(
+                playlistNextButton,
+                new LinearLayout.LayoutParams(wrap(), dp(48))
+        );
+
+        card.addView(controls);
         return card;
     }
 
@@ -564,15 +703,16 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void playInput() {
-        String canonical = YouTubeUrlParser.canonicalize(linkInput.getText().toString());
-        if (canonical == null) {
+        YouTubeUrlParser.PlayableLink link =
+                YouTubeUrlParser.parsePlayable(linkInput.getText().toString());
+        if (link == null) {
             recordFailure("link validation", "Invalid or unsupported YouTube link");
             showError(getString(R.string.invalid_link));
             return;
         }
         hideKeyboard();
-        linkInput.setText(canonical);
-        startPlayback(canonical, false);
+        linkInput.setText(link.getCanonicalUrl());
+        startPlayable(link, -1, null, PlaybackStartReason.USER);
     }
 
     private void pasteClipboard() {
@@ -590,7 +730,126 @@ public final class MainActivity extends ComponentActivity {
         }
     }
 
-    private void startPlayback(String canonicalUrl, boolean retry) {
+    private void startPlayable(
+            YouTubeUrlParser.PlayableLink link,
+            int requestedPlaylistIndex,
+            String requestedVideoId,
+            PlaybackStartReason reason
+    ) {
+        sourceUrl = link.getCanonicalUrl();
+        if (link.isPlaylist()) {
+            String preferredVideoId = requestedVideoId == null
+                    ? link.getVideoId()
+                    : requestedVideoId;
+            int preferredIndex = PlaybackSessionState.anchoredPlaylistIndex(
+                    requestedPlaylistIndex,
+                    link.getPlaylistIndex(),
+                    preferredVideoId
+            );
+            startPlaylist(link, preferredIndex, preferredVideoId, reason);
+            return;
+        }
+
+        playlistLoadGeneration.incrementAndGet();
+        cancelTask(activePlaylistResolveTask);
+        activePlaylistResolveTask = null;
+        playlistQueue = null;
+        playlistCard.setVisibility(View.GONE);
+        startPlayback(link.getCanonicalUrl(), reason);
+    }
+
+    private void startPlaylist(
+            YouTubeUrlParser.PlayableLink link,
+            int preferredIndex,
+            String preferredVideoId,
+            PlaybackStartReason reason
+    ) {
+        int playlistGeneration = playlistLoadGeneration.incrementAndGet();
+        int invalidatedVideoGeneration = loadGeneration.incrementAndGet();
+        handledEndGeneration = invalidatedVideoGeneration;
+        cancelTask(activePlaylistResolveTask);
+        cancelTask(activeVideoResolveTask);
+        activePlaylistResolveTask = null;
+        activeVideoResolveTask = null;
+
+        playlistQueue = null;
+        activeUrl = null;
+        activeVideo = null;
+        selectedMediaPrepared = false;
+        retriedAfterPlaybackFailure = false;
+        player.stop();
+        resetItemProtection();
+        if (reason == PlaybackStartReason.RESTORE) {
+            pendingRestorePlaylistIndex = preferredIndex;
+        } else {
+            pendingSeekMs = PlaybackSessionState.NO_PENDING_SEEK;
+            pendingRestoreVideoId = null;
+            pendingRestorePlaylistIndex = -1;
+            playbackSessionState.requestPlayWhenReady(true);
+        }
+
+        clearFailure();
+        errorCard.setVisibility(View.GONE);
+        loadingIndicator.setVisibility(View.VISIBLE);
+        playbackStatus.setText(getString(R.string.loading_playlist));
+        titleText.setText(getString(R.string.playlist_loading_name));
+        uploaderText.setText(getString(R.string.playlist_loading_detail));
+        playlistCard.setVisibility(View.VISIBLE);
+        playlistNameText.setText(getString(R.string.playlist_loading_name));
+        playlistPositionText.setText(getString(R.string.playlist_loading_detail));
+        setPlaylistButtonEnabled(playlistPreviousButton, false);
+        setPlaylistButtonEnabled(playlistNextButton, false);
+
+        // Keep the seed video for generated mixes; some mix IDs cannot be
+        // resolved from a playlist-only URL.
+        String playlistUrl = link.getCanonicalUrl();
+        activePlaylistResolveTask = playlistResolverExecutor.submit(() -> {
+            try {
+                ResolvedPlaylist resolved = playlistResolver.resolve(playlistUrl);
+                runOnUiThread(() -> {
+                    if (playlistGeneration != playlistLoadGeneration.get()
+                            || activityUnavailable()) {
+                        return;
+                    }
+                    playlistQueue = new PlaylistQueue(
+                            resolved,
+                            preferredIndex,
+                            preferredVideoId
+                    );
+                    renderPlaylistQueue();
+                    startCurrentPlaylistItem(
+                            reason == PlaybackStartReason.RESTORE
+                                    ? PlaybackStartReason.RESTORE
+                                    : PlaybackStartReason.PLAYLIST_ITEM
+                    );
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (playlistGeneration == playlistLoadGeneration.get()
+                            && !activityUnavailable()) {
+                        recordFailure("playlist resolution", deepestType(error));
+                        showError(humanPlaylistError(error));
+                        playlistPositionText.setText("");
+                    }
+                });
+            }
+        });
+    }
+
+    private void startCurrentPlaylistItem(PlaybackStartReason reason) {
+        if (playlistQueue == null) {
+            return;
+        }
+        PlaylistEntry entry = playlistQueue.current();
+        renderPlaylistQueue();
+        titleText.setText(entry.getTitle());
+        uploaderText.setText(
+                entry.getUploader().isEmpty() ? "YouTube" : entry.getUploader()
+        );
+        startPlayback(entry.getCanonicalUrl(), reason);
+    }
+
+    private void startPlayback(String canonicalUrl, PlaybackStartReason reason) {
         String videoId = YouTubeUrlParser.extractVideoId(canonicalUrl);
         if (videoId == null) {
             recordFailure("link validation", "Invalid or unsupported YouTube link");
@@ -598,40 +857,58 @@ public final class MainActivity extends ComponentActivity {
             return;
         }
 
+        boolean retry = reason == PlaybackStartReason.RETRY;
+        if (reason == PlaybackStartReason.RESTORE) {
+            pendingSeekMs = PlaybackSessionState.seekForRestoredVideo(
+                    pendingSeekMs,
+                    pendingRestoreVideoId,
+                    videoId
+            );
+            pendingRestoreVideoId = null;
+            pendingRestorePlaylistIndex = -1;
+        } else if (!retry) {
+            pendingSeekMs = PlaybackSessionState.NO_PENDING_SEEK;
+            pendingRestoreVideoId = null;
+            pendingRestorePlaylistIndex = -1;
+            playbackSessionState.requestPlayWhenReady(true);
+        }
         if (!retry) {
             clearFailure();
             sponsorLookupStatus = "Loading";
         }
         int generation = loadGeneration.incrementAndGet();
+        handledEndGeneration = -1;
+        preparedPlaybackGeneration = -1;
+        cancelTask(activeVideoResolveTask);
+        activeVideoResolveTask = null;
         activeUrl = canonicalUrl;
         activeVideo = null;
+        selectedMediaPrepared = false;
         errorCard.setVisibility(View.GONE);
         loadingIndicator.setVisibility(View.VISIBLE);
         playbackStatus.setText(retry ? "Refreshing the stream…" : getString(R.string.loading_video));
         if (!retry) {
             retriedAfterPlaybackFailure = false;
-            pendingSeekMs = C.TIME_UNSET;
-            pendingPlayWhenReady = true;
             player.stop();
-            skipController.setSegments(List.of());
+            resetItemProtection();
         }
 
         fetchSponsorSegments(videoId, generation);
         int maxHeight = preferenceStore.maxHeight();
-        resolverExecutor.execute(() -> {
+        activeVideoResolveTask = videoResolverExecutor.submit(() -> {
             try {
                 ResolvedVideo resolved = videoResolver.resolve(canonicalUrl, maxHeight);
                 runOnUiThread(() -> {
-                    if (generation != loadGeneration.get() || isFinishing()) {
+                    if (generation != loadGeneration.get() || activityUnavailable()) {
                         return;
                     }
-                    beginResolvedPlayback(resolved);
+                    beginResolvedPlayback(resolved, generation);
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
-                    if (generation == loadGeneration.get() && !isFinishing()) {
+                    if (generation == loadGeneration.get() && !activityUnavailable()) {
                         recordFailure("video resolution", deepestType(error));
-                        showError(humanResolveError(error));
+                        showError(withPlaylistContinuation(humanResolveError(error)));
                     }
                 });
             }
@@ -651,7 +928,7 @@ public final class MainActivity extends ComponentActivity {
         CompletableFuture<List<SponsorSegment>> future =
                 sponsorBlockClient.getSegments(videoId, categories);
         future.whenComplete((segments, error) -> runOnUiThread(() -> {
-            if (generation != loadGeneration.get() || isFinishing()) {
+            if (generation != loadGeneration.get() || activityUnavailable()) {
                 return;
             }
             if (error == null && segments != null) {
@@ -669,8 +946,9 @@ public final class MainActivity extends ComponentActivity {
         }));
     }
 
-    private void beginResolvedPlayback(ResolvedVideo resolved) {
+    private void beginResolvedPlayback(ResolvedVideo resolved, int generation) {
         activeVideo = resolved;
+        preparedPlaybackGeneration = generation;
         titleText.setText(resolved.getTitle());
         uploaderText.setText(
                 resolved.getUploader().isEmpty() ? "YouTube" : resolved.getUploader()
@@ -678,8 +956,106 @@ public final class MainActivity extends ComponentActivity {
         playbackStatus.setText("Preparing ad-free playback…");
         MediaSource source = playbackSourceFactory.create(resolved);
         player.setMediaSource(source);
+        selectedMediaPrepared = true;
+        player.setPlayWhenReady(playbackSessionState.shouldPlayWhenReady());
         player.prepare();
-        player.setPlayWhenReady(true);
+    }
+
+    private void handlePlaybackEnded() {
+        int generation = loadGeneration.get();
+        if (preparedPlaybackGeneration != generation
+                || handledEndGeneration == generation) {
+            return;
+        }
+        handledEndGeneration = generation;
+
+        if (playlistQueue != null && playlistQueue.next()) {
+            startCurrentPlaylistItem(PlaybackStartReason.PLAYLIST_ITEM);
+            return;
+        }
+        playbackStatus.setText(
+                playlistQueue == null
+                        ? "Finished"
+                        : getString(
+                                playlistQueue.getPlaylist().isComplete()
+                                        ? R.string.playlist_finished
+                                        : R.string.playlist_loaded_items_finished
+                        )
+        );
+        renderPlaylistQueue();
+    }
+
+    private void playNextPlaylistItem() {
+        if (playlistQueue != null && playlistQueue.next()) {
+            startCurrentPlaylistItem(PlaybackStartReason.PLAYLIST_ITEM);
+        }
+    }
+
+    private void playPreviousPlaylistItem() {
+        if (playlistQueue != null && playlistQueue.previous()) {
+            startCurrentPlaylistItem(PlaybackStartReason.PLAYLIST_ITEM);
+        }
+    }
+
+    private void renderPlaylistQueue() {
+        if (playlistQueue == null) {
+            return;
+        }
+        ResolvedPlaylist resolved = playlistQueue.getPlaylist();
+        playlistCard.setVisibility(View.VISIBLE);
+        playlistNameText.setText(resolved.getTitle());
+
+        int position = playlistQueue.position() + 1;
+        int size = playlistQueue.size();
+        int positionString;
+        if (resolved.isMix()) {
+            positionString = R.string.playlist_mix_position;
+        } else if (!resolved.isComplete()) {
+            positionString = R.string.playlist_position_partial;
+        } else {
+            positionString = R.string.playlist_position;
+        }
+        playlistPositionText.setText(getString(positionString, position, size));
+        setPlaylistButtonEnabled(
+                playlistPreviousButton,
+                playlistQueue.hasPrevious()
+        );
+        setPlaylistButtonEnabled(playlistNextButton, playlistQueue.hasNext());
+    }
+
+    private static void setPlaylistButtonEnabled(Button button, boolean enabled) {
+        button.setEnabled(enabled);
+        button.setAlpha(enabled ? 1f : 0.45f);
+    }
+
+    private void resetItemProtection() {
+        lastSkippedSegment = null;
+        mainHandler.removeCallbacks(hideSkipNotice);
+        if (skipNotice != null) {
+            skipNotice.animate().cancel();
+            skipNotice.setVisibility(View.GONE);
+        }
+        skipController.setSegments(List.of());
+        sponsorLookupStatus = "Loading";
+        updateProtectionText();
+    }
+
+    private static void cancelTask(Future<?> task) {
+        if (task != null) {
+            task.cancel(true);
+        }
+    }
+
+    private boolean activityUnavailable() {
+        return destroyed || isFinishing() || isDestroyed();
+    }
+
+    private String withPlaylistContinuation(String message) {
+        if (playlistQueue == null || !playlistQueue.hasNext()) {
+            return message;
+        }
+        return message + "\n\n"
+                + getString(R.string.playlist_continue_after_error);
     }
 
     private void onSponsorSkipped(SponsorSegment segment) {
@@ -1764,12 +2140,18 @@ public final class MainActivity extends ComponentActivity {
         } else if (Intent.ACTION_SEND.equals(intent.getAction())) {
             candidate = intent.getStringExtra(Intent.EXTRA_TEXT);
         }
-        String canonical = YouTubeUrlParser.canonicalize(candidate);
-        if (canonical == null) {
+        if (candidate == null) {
             return false;
         }
-        linkInput.setText(canonical);
-        startPlayback(canonical, false);
+        YouTubeUrlParser.PlayableLink link =
+                YouTubeUrlParser.parsePlayable(candidate);
+        if (link == null) {
+            recordFailure("link validation", "Invalid or unsupported YouTube link");
+            showError(getString(R.string.invalid_link));
+            return true;
+        }
+        linkInput.setText(link.getCanonicalUrl());
+        startPlayable(link, -1, null, PlaybackStartReason.USER);
         return true;
     }
 
@@ -1818,23 +2200,29 @@ public final class MainActivity extends ComponentActivity {
     @Override
     protected void onStart() {
         super.onStart();
+        playbackSessionState.onStart();
+        player.setPlayWhenReady(playbackSessionState.shouldPlayWhenReady());
         skipController.start();
     }
 
     @Override
     protected void onStop() {
         skipController.stop();
-        if (player.isPlaying()) {
-            player.pause();
-        }
+        playbackSessionState.onStop();
+        player.setPlayWhenReady(false);
         super.onStop();
     }
 
     @Override
     protected void onDestroy() {
         destroyed = true;
+        loadGeneration.incrementAndGet();
+        playlistLoadGeneration.incrementAndGet();
         mainHandler.removeCallbacksAndMessages(null);
-        resolverExecutor.shutdownNow();
+        cancelTask(activeVideoResolveTask);
+        cancelTask(activePlaylistResolveTask);
+        videoResolverExecutor.shutdownNow();
+        playlistResolverExecutor.shutdownNow();
         updateCheckExecutor.shutdownNow();
         activeSettingsDialog = null;
         activeUpdateCheckDetail = null;
@@ -1848,8 +2236,35 @@ public final class MainActivity extends ComponentActivity {
     protected void onSaveInstanceState(Bundle outState) {
         captureBugReportEditorState();
         outState.putString(STATE_URL, activeUrl);
-        outState.putLong(STATE_POSITION, player.getCurrentPosition());
-        outState.putBoolean(STATE_PLAY_WHEN_READY, player.getPlayWhenReady());
+        outState.putString(
+                STATE_SOURCE_URL,
+                sourceUrl == null ? activeUrl : sourceUrl
+        );
+        String currentVideoId = activeVideo == null
+                ? YouTubeUrlParser.extractVideoId(activeUrl)
+                : activeVideo.getVideoId();
+        if (currentVideoId == null) {
+            currentVideoId = pendingRestoreVideoId;
+        }
+        outState.putString(STATE_CURRENT_VIDEO_ID, currentVideoId);
+        outState.putInt(
+                STATE_PLAYLIST_INDEX,
+                playlistQueue == null
+                        ? pendingRestorePlaylistIndex
+                        : playlistQueue.position()
+        );
+        outState.putLong(
+                STATE_POSITION,
+                PlaybackSessionState.positionToSave(
+                        selectedMediaPrepared,
+                        pendingSeekMs,
+                        player.getCurrentPosition()
+                )
+        );
+        outState.putBoolean(
+                STATE_PLAY_WHEN_READY,
+                playbackSessionState.intendedPlayWhenReady()
+        );
         outState.putInt(STATE_BUG_REPORT_STEP, bugReportStep);
         if (bugReportStep != BUG_REPORT_CLOSED) {
             outState.putString(STATE_BUG_REPORT_DRAFT, bugReportDraft);
@@ -1964,6 +2379,9 @@ public final class MainActivity extends ComponentActivity {
         playbackStatus.setText("Unable to play");
         errorText.setText(message);
         errorCard.setVisibility(View.VISIBLE);
+        errorCard.setFocusable(true);
+        errorCard.requestFocus();
+        errorCard.announceForAccessibility(message);
     }
 
     private String statusForReadyVideo() {
@@ -1982,6 +2400,25 @@ public final class MainActivity extends ComponentActivity {
                         ? "AD-FREE"
                         : "AD-FREE • SPONSORS"
         );
+    }
+
+    private String humanPlaylistError(Throwable error) {
+        String message = deepestMessage(error);
+        String lower = message.toLowerCase(Locale.US);
+        if (lower.contains("no playable")
+                || lower.contains("empty playlist")
+                || lower.contains("does not contain")) {
+            return getString(R.string.playlist_no_playable_videos);
+        }
+        if (lower.contains("private")
+                || lower.contains("sign in")
+                || lower.contains("account")) {
+            return "This playlist is private or requires a YouTube account. "
+                    + "Plyvanta supports public playlists without signing in.";
+        }
+        return "Plyvanta could not load this playlist. YouTube sometimes changes its "
+                + "playlist format; try again or update the app.\n\n"
+                + message;
     }
 
     private String humanResolveError(Throwable error) {

@@ -3,6 +3,16 @@
 Releases after 1.0.0 are versioned from Conventional Commits and documented in
 their immutable GitHub Release notes.
 
+## Unreleased
+
+### Added
+
+- Added public YouTube playlist and Mix links with ordered playback, shared
+  starting-video and video-anchored index handling, automatic advance, and
+  Previous/Next controls.
+- Added playlist position and partial-queue status, per-video SponsorBlock
+  refresh, and process-state restoration without storing expiring media URLs.
+
 ## 1.0.0 - 2026-07-26
 
 First stable release of Plyvanta, built from the functionality validated in
