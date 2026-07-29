@@ -173,6 +173,7 @@ preview first; uninstalling removes that preview's local app data.
 | `app/src/androidTest/` | Tests that require an Android device or emulator |
 | `app/build.gradle.kts` | Android configuration, dependencies, and packaging tasks |
 | `scripts/` | Package, release, integrity, and smoke-test tooling |
+| `docs/OFFLINE_SECURITY.md` | Mandatory offline-media security contract |
 | `docs/RELEASING.md` | Maintainer-facing automated release procedure |
 | `.github/workflows/release.yml` | Pull-request verification and main-branch release workflow |
 | `NOTICE.md`, `THIRD_PARTY_NOTICES.md`, `licenses/` | Project and dependency attribution |
@@ -229,6 +230,36 @@ opened URLs must still pass through `YouTubeUrlParser` before use.
 
 Privacy and update integrity are product behavior, not optional polish. Changes
 must preserve all of the following.
+
+### Offline media
+
+Any change that creates, reads, plays, lists, or deletes offline media must
+follow the complete [`docs/OFFLINE_SECURITY.md`](docs/OFFLINE_SECURITY.md)
+contract. Offline behavior is deliberately fail-closed: do not add a weaker
+device, key, storage, source-format, background-download, recovery, export,
+share, cast, or capture fallback when a required protection is unavailable.
+
+This strictness is intentional official-project policy, not just cryptographic
+hardening. Media extraction and offline copying add copyright and
+platform-terms risk to an already unofficial client. Upstream supports offline
+saving only for authorized personal entertainment and deliberately keeps the
+official app from becoming a convenient redistribution tool for free copies of
+media that may be copyrighted. Personal or noncommercial use alone is not proof
+of permission.
+
+The GPL permits forks to modify the code, and a fork can remove these controls
+subject to the license and applicable law. Those code rights grant no rights in
+downloaded media, and a fork's product choices are not official upstream
+policy. That does not justify weakening the barrier in official Plyvanta.
+Contributions must preserve both the technical restrictions and the user-facing
+explanation of the personal-use, anti-redistribution, and official-upstream
+policy. A proposal to remove either belongs outside the official project.
+
+Treat changes to eligibility checks, StrongBox key policy, encrypted file
+format, persistent metadata, download lifecycle, deletion, Media3 data sources,
+manifest components, backup behavior, or playback output as
+security-boundary changes. They require focused negative tests and explicit
+review against every invariant and known limitation in the contract.
 
 ### Playback and SponsorBlock
 

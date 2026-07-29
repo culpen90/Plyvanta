@@ -2,6 +2,7 @@ package app.plyvanta;
 
 import android.Manifest;
 import android.app.AlertDialog;
+import android.app.KeyguardManager;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -66,6 +67,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -73,6 +75,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import app.plyvanta.offline.ContentKeyProtector;
+import app.plyvanta.offline.OfflineDownloadEligibility;
+import app.plyvanta.offline.OfflineDownloadManager;
+import app.plyvanta.offline.OfflineMediaRecord;
+import app.plyvanta.offline.OfflineMediaStore;
+import app.plyvanta.offline.OfflineSecurityPolicy;
+import app.plyvanta.offline.PlaybackProtection;
 import app.plyvanta.playback.NewPipePlaylistResolver;
 import app.plyvanta.playback.NewPipeVideoResolver;
 import app.plyvanta.playback.PlaybackSessionState;
@@ -118,6 +127,7 @@ public final class MainActivity extends ComponentActivity {
     private static final int BUG_REPORT_EDITING = 1;
     private static final int BUG_REPORT_REVIEWING = 2;
     private static final int REQUEST_UPDATE_NOTIFICATIONS = 1001;
+    private static final int REQUEST_OFFLINE_CREDENTIAL = 1002;
 
     private enum PlaybackStartReason {
         USER,
@@ -126,14 +136,24 @@ public final class MainActivity extends ComponentActivity {
         RESTORE
     }
 
+    private enum PendingOfflineAction {
+        NONE,
+        DOWNLOAD_CURRENT,
+        SHOW_LIBRARY,
+        PLAY_ITEM
+    }
+
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService videoResolverExecutor =
             Executors.newSingleThreadExecutor();
     private final ExecutorService playlistResolverExecutor =
             Executors.newSingleThreadExecutor();
     private final ExecutorService updateCheckExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService offlineExecutor = Executors.newSingleThreadExecutor();
     private final AtomicInteger loadGeneration = new AtomicInteger();
     private final AtomicInteger playlistLoadGeneration = new AtomicInteger();
+    private final AtomicInteger offlineForegroundGeneration =
+            new AtomicInteger();
     private final AtomicLong updateDownloadVerificationGeneration = new AtomicLong();
     private final PlaybackSessionState playbackSessionState =
             new PlaybackSessionState();
@@ -162,6 +182,10 @@ public final class MainActivity extends ComponentActivity {
     private ProgressBar loadingIndicator;
     private LinearLayout skipNotice;
     private TextView skipNoticeText;
+    private Button offlineSaveButton;
+    private Button offlineLibraryButton;
+    private TextView offlineStatusText;
+    private ProgressBar offlineProgress;
 
     private ExoPlayer player;
     private PlaybackSourceFactory playbackSourceFactory;
@@ -169,6 +193,9 @@ public final class MainActivity extends ComponentActivity {
     private SponsorBlockClient sponsorBlockClient;
     private PreferenceStore preferenceStore;
     private UpdatePreferences updatePreferences;
+    private OfflineSecurityPolicy offlineSecurityPolicy;
+    private OfflineMediaStore offlineMediaStore;
+    private OfflineDownloadManager offlineDownloadManager;
     private final NewPipeVideoResolver videoResolver = new NewPipeVideoResolver();
     private final NewPipePlaylistResolver playlistResolver =
             new NewPipePlaylistResolver();
@@ -179,6 +206,17 @@ public final class MainActivity extends ComponentActivity {
     private PlaylistQueue playlistQueue;
     private Future<?> activeVideoResolveTask;
     private Future<?> activePlaylistResolveTask;
+    private Future<?> activeOfflineTask;
+    private OfflineDownloadManager.Cancellation offlineDownloadCancellation;
+    private OfflineMediaStore.PlaybackSession offlinePlaybackSession;
+    private OfflineMediaRecord activeOfflineRecord;
+    private PendingOfflineAction pendingOfflineAction = PendingOfflineAction.NONE;
+    private UUID pendingOfflineItemId;
+    private ResolvedVideo pendingOfflineVideo;
+    private boolean awaitingOfflineCredential;
+    private boolean offlineCredentialApproved;
+    private boolean offlineDownloadInProgress;
+    private String offlineInitializationFailure;
     private boolean fullscreen;
     private boolean retriedAfterPlaybackFailure;
     private int handledEndGeneration = -1;
@@ -231,6 +269,7 @@ public final class MainActivity extends ComponentActivity {
         updateNotificationsWereAllowed =
                 UpdateNotificationManager.notificationsAllowed(this);
         sponsorBlockClient = new SponsorBlockClient();
+        initializeOfflineMedia();
         buildPlayer();
         setContentView(buildUi());
         applySystemInsets();
@@ -295,6 +334,7 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void configureWindow() {
+        PlaybackProtection.protectActivity(this);
         Window window = getWindow();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false);
@@ -306,12 +346,26 @@ public final class MainActivity extends ComponentActivity {
         window.setNavigationBarColor(getColor(R.color.ink));
     }
 
+    private void initializeOfflineMedia() {
+        offlineSecurityPolicy = new OfflineSecurityPolicy();
+        try {
+            offlineMediaStore = OfflineMediaStore.forApplication(this);
+            offlineMediaStore.cleanupPartials();
+            offlineDownloadManager = new OfflineDownloadManager(offlineMediaStore);
+        } catch (Exception exception) {
+            offlineMediaStore = null;
+            offlineDownloadManager = null;
+            offlineInitializationFailure = exception.getClass().getSimpleName();
+        }
+    }
+
     private void buildPlayer() {
         player = new ExoPlayer.Builder(this).build();
         player.setAudioAttributes(
                 new AudioAttributes.Builder()
                         .setUsage(C.USAGE_MEDIA)
                         .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .setAllowedCapturePolicy(C.ALLOW_CAPTURE_BY_NONE)
                         .build(),
                 true
         );
@@ -355,6 +409,12 @@ public final class MainActivity extends ComponentActivity {
                         "playback",
                         "Media3 code " + error.errorCode + " / " + deepestType(error)
                 );
+                if (activeOfflineRecord != null) {
+                    clearActiveOfflinePlayback(false);
+                    showError(getString(R.string.offline_integrity_error));
+                    refreshOfflineControls();
+                    return;
+                }
                 if (!retriedAfterPlaybackFailure && activeUrl != null) {
                     retriedAfterPlaybackFailure = true;
                     pendingSeekMs = Math.max(0, player.getCurrentPosition());
@@ -372,6 +432,7 @@ public final class MainActivity extends ComponentActivity {
     private View buildUi() {
         root = new FrameLayout(this);
         root.setBackgroundColor(getColor(R.color.ink));
+        PlaybackProtection.protectSensitiveView(root);
 
         appContent = new LinearLayout(this);
         appContent.setOrientation(LinearLayout.VERTICAL);
@@ -431,6 +492,7 @@ public final class MainActivity extends ComponentActivity {
         playlistCard = buildPlaylistCard();
         body.addView(playlistCard, spacedCardParams());
         body.addView(buildInputCard(), spacedCardParams());
+        body.addView(buildOfflineCard(), spacedCardParams());
         body.addView(buildProtectionCard(), spacedCardParams());
 
         errorCard = new LinearLayout(this);
@@ -520,12 +582,13 @@ public final class MainActivity extends ComponentActivity {
         container.setBackgroundColor(Color.BLACK);
 
         playerView = new PlayerView(this);
-        playerView.setPlayer(player);
         playerView.setUseController(true);
         playerView.setControllerAutoShow(true);
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
         playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
         playerView.setContentDescription(getString(R.string.video_player));
+        PlaybackProtection.protectVideoSurface(playerView);
+        playerView.setPlayer(player);
         container.addView(playerView, matchParent());
 
         fullscreenButton = iconButton(
@@ -596,6 +659,86 @@ public final class MainActivity extends ComponentActivity {
         LinearLayout.LayoutParams pasteParams = new LinearLayout.LayoutParams(wrap(), dp(42));
         pasteParams.gravity = Gravity.END;
         card.addView(paste, pasteParams);
+        return card;
+    }
+
+    private LinearLayout buildOfflineCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(14), dp(14), dp(14));
+        card.setBackgroundResource(R.drawable.bg_card);
+
+        TextView heading = text(
+                getString(R.string.offline_section),
+                11,
+                getColor(R.color.text_secondary)
+        );
+        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        card.addView(heading);
+
+        TextView detail = text(
+                getString(R.string.offline_detail),
+                13,
+                getColor(R.color.text_primary)
+        );
+        detail.setPadding(0, dp(8), 0, 0);
+        card.addView(detail);
+
+        offlineStatusText = text(
+                getString(R.string.offline_waiting_for_video),
+                12,
+                getColor(R.color.text_secondary)
+        );
+        offlineStatusText.setPadding(0, dp(8), 0, 0);
+        offlineStatusText.setAccessibilityLiveRegion(
+                View.ACCESSIBILITY_LIVE_REGION_POLITE
+        );
+        card.addView(offlineStatusText);
+
+        offlineProgress = new ProgressBar(
+                this,
+                null,
+                android.R.attr.progressBarStyleHorizontal
+        );
+        offlineProgress.setMax(100);
+        offlineProgress.setProgressTintList(
+                android.content.res.ColorStateList.valueOf(getColor(R.color.coral))
+        );
+        offlineProgress.setVisibility(View.GONE);
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(8)
+        );
+        progressParams.setMargins(0, dp(10), 0, dp(4));
+        card.addView(offlineProgress, progressParams);
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+
+        offlineLibraryButton = textButton(getString(R.string.offline_downloads));
+        offlineLibraryButton.setOnClickListener(
+                view -> requestOfflineCredential(
+                        PendingOfflineAction.SHOW_LIBRARY,
+                        null
+                )
+        );
+        actions.addView(
+                offlineLibraryButton,
+                new LinearLayout.LayoutParams(wrap(), dp(46))
+        );
+
+        offlineSaveButton = primaryButton(getString(R.string.save_offline));
+        offlineSaveButton.setOnClickListener(view -> promptOfflineSave());
+        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
+                wrap(),
+                dp(46)
+        );
+        saveParams.setMargins(dp(8), 0, 0, 0);
+        actions.addView(offlineSaveButton, saveParams);
+        card.addView(actions);
+
+        refreshOfflineControls();
         return card;
     }
 
@@ -706,6 +849,802 @@ public final class MainActivity extends ComponentActivity {
         return notice;
     }
 
+    private OfflineSecurityPolicy.Decision offlineSecurityDecision() {
+        if (offlineSecurityPolicy == null) {
+            return OfflineSecurityPolicy.Decision.forReason(
+                    OfflineSecurityPolicy.Reason.STRONGBOX_REQUIRED
+            );
+        }
+        return offlineSecurityPolicy.evaluate(this);
+    }
+
+    private void refreshOfflineControls() {
+        if (offlineSaveButton == null
+                || offlineLibraryButton == null
+                || offlineStatusText == null
+                || offlineDownloadInProgress) {
+            return;
+        }
+
+        OfflineSecurityPolicy.Decision security = offlineSecurityDecision();
+        boolean storeReady = offlineMediaStore != null
+                && offlineDownloadManager != null
+                && offlineInitializationFailure == null;
+        boolean secure = storeReady && security.isAllowed();
+        offlineLibraryButton.setEnabled(secure);
+
+        if (!storeReady) {
+            offlineSaveButton.setEnabled(false);
+            offlineStatusText.setText(getString(
+                    R.string.offline_security_unavailable,
+                    "private vault initialization failed"
+            ));
+            offlineStatusText.setTextColor(getColor(R.color.coral));
+            return;
+        }
+        if (!security.isAllowed()) {
+            offlineSaveButton.setEnabled(false);
+            offlineStatusText.setText(getString(
+                    R.string.offline_security_unavailable,
+                    security.getMessage()
+            ));
+            offlineStatusText.setTextColor(getColor(R.color.coral));
+            return;
+        }
+        if (activeOfflineRecord != null && offlinePlaybackSession != null) {
+            offlineSaveButton.setEnabled(false);
+            offlineStatusText.setText(R.string.offline_playback_ready);
+            offlineStatusText.setTextColor(getColor(R.color.mint));
+            return;
+        }
+        if (activeVideo == null) {
+            offlineSaveButton.setEnabled(false);
+            offlineStatusText.setText(R.string.offline_waiting_for_video);
+            offlineStatusText.setTextColor(getColor(R.color.text_secondary));
+            return;
+        }
+
+        OfflineDownloadEligibility.Decision eligibility =
+                OfflineDownloadEligibility.evaluate(activeVideo);
+        offlineSaveButton.setEnabled(eligibility.isAllowed());
+        if (eligibility.isAllowed()) {
+            offlineStatusText.setText(R.string.offline_ready_to_save);
+            offlineStatusText.setTextColor(getColor(R.color.mint));
+        } else {
+            offlineStatusText.setText(
+                    eligibility.getReason()
+                            == OfflineDownloadEligibility.Reason
+                            .LIVE_OR_SEGMENTED_STREAM
+                            ? R.string.offline_segmented_unsupported
+                            : R.string.offline_download_failed
+            );
+            offlineStatusText.setTextColor(getColor(R.color.coral));
+        }
+    }
+
+    private void promptOfflineSave() {
+        if (activeVideo == null
+                || !OfflineDownloadEligibility.evaluate(activeVideo).isAllowed()
+                || offlineDownloadInProgress) {
+            refreshOfflineControls();
+            return;
+        }
+        ResolvedVideo offeredVideo = activeVideo;
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.offline_rights_title)
+                .setMessage(R.string.offline_rights_message)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(
+                        R.string.offline_confirm_save,
+                        (ignoredDialog, ignoredWhich) -> {
+                            if (activeVideo != offeredVideo) {
+                                Toast.makeText(
+                                        this,
+                                        R.string.offline_waiting_for_video,
+                                        Toast.LENGTH_LONG
+                                ).show();
+                                return;
+                            }
+                            requestOfflineCredential(
+                                    PendingOfflineAction.DOWNLOAD_CURRENT,
+                                    null
+                            );
+                        }
+                )
+                .create();
+        dialog.setOnShowListener(ignored -> dialog
+                .getButton(AlertDialog.BUTTON_POSITIVE)
+                .setTextColor(getColor(R.color.coral)));
+        dialog.show();
+    }
+
+    private void requestOfflineCredential(
+            PendingOfflineAction action,
+            UUID itemId
+    ) {
+        if (action == PendingOfflineAction.NONE || !isOfflineForeground()) {
+            return;
+        }
+        OfflineSecurityPolicy.Decision security = offlineSecurityDecision();
+        if (offlineMediaStore == null || !security.isAllowed()) {
+            showOfflineUnavailable(
+                    offlineMediaStore == null
+                            ? "Private vault initialization failed."
+                            : security.getMessage()
+            );
+            return;
+        }
+
+        KeyguardManager keyguardManager =
+                (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+        Intent credentialIntent = keyguardManager == null
+                ? null
+                : keyguardManager.createConfirmDeviceCredentialIntent(
+                        getString(R.string.offline_auth_title),
+                        getString(R.string.offline_auth_message)
+                );
+        if (credentialIntent == null) {
+            Toast.makeText(
+                    this,
+                    R.string.offline_auth_unavailable,
+                    Toast.LENGTH_LONG
+            ).show();
+            return;
+        }
+        pendingOfflineAction = action;
+        pendingOfflineItemId = itemId;
+        pendingOfflineVideo = action == PendingOfflineAction.DOWNLOAD_CURRENT
+                ? activeVideo
+                : null;
+        if (action == PendingOfflineAction.DOWNLOAD_CURRENT
+                && pendingOfflineVideo == null) {
+            clearPendingOfflineCredential();
+            return;
+        }
+        awaitingOfflineCredential = true;
+        offlineCredentialApproved = false;
+        try {
+            startActivityForResult(
+                    credentialIntent,
+                    REQUEST_OFFLINE_CREDENTIAL
+            );
+        } catch (RuntimeException exception) {
+            clearPendingOfflineCredential();
+            Toast.makeText(
+                    this,
+                    R.string.offline_auth_unavailable,
+                    Toast.LENGTH_LONG
+            ).show();
+        }
+    }
+
+    private void performApprovedOfflineActionIfResumed() {
+        if (!offlineCredentialApproved
+                || pendingOfflineAction == PendingOfflineAction.NONE
+                || !isOfflineForeground()) {
+            return;
+        }
+        OfflineSecurityPolicy.Decision security = offlineSecurityDecision();
+        if (offlineMediaStore == null || !security.isAllowed()) {
+            clearPendingOfflineCredential();
+            showOfflineUnavailable(
+                    offlineMediaStore == null
+                            ? "Private vault initialization failed."
+                            : security.getMessage()
+            );
+            return;
+        }
+        offlineCredentialApproved = false;
+        performPendingOfflineAction();
+    }
+
+    private void performPendingOfflineAction() {
+        PendingOfflineAction action = pendingOfflineAction;
+        UUID itemId = pendingOfflineItemId;
+        ResolvedVideo video = pendingOfflineVideo;
+        pendingOfflineAction = PendingOfflineAction.NONE;
+        pendingOfflineItemId = null;
+        pendingOfflineVideo = null;
+        switch (action) {
+            case DOWNLOAD_CURRENT:
+                startOfflineDownload(video);
+                break;
+            case SHOW_LIBRARY:
+                loadOfflineLibrary();
+                break;
+            case PLAY_ITEM:
+                if (itemId != null) {
+                    openOfflineItem(itemId);
+                }
+                break;
+            case NONE:
+            default:
+                break;
+        }
+    }
+
+    private void clearPendingOfflineCredential() {
+        awaitingOfflineCredential = false;
+        offlineCredentialApproved = false;
+        pendingOfflineAction = PendingOfflineAction.NONE;
+        pendingOfflineItemId = null;
+        pendingOfflineVideo = null;
+    }
+
+    private void startOfflineDownload(ResolvedVideo video) {
+        if (offlineDownloadInProgress
+                || offlineDownloadManager == null
+                || video == null
+                || activeVideo != video
+                || !isOfflineForeground()
+                || !offlineSecurityDecision().isAllowed()
+                || !OfflineDownloadEligibility.evaluate(video).isAllowed()) {
+            refreshOfflineControls();
+            return;
+        }
+
+        int foregroundGeneration = offlineForegroundGeneration.get();
+        OfflineDownloadManager.Cancellation cancellation =
+                new OfflineDownloadManager.Cancellation();
+        offlineDownloadCancellation = cancellation;
+        offlineDownloadInProgress = true;
+        offlineProgress.setProgress(0);
+        offlineProgress.setVisibility(View.VISIBLE);
+        offlineSaveButton.setText(R.string.offline_cancel);
+        offlineSaveButton.setEnabled(true);
+        offlineSaveButton.setOnClickListener(view -> cancelOfflineDownload());
+        offlineLibraryButton.setEnabled(false);
+        offlineStatusText.setText(getString(
+                R.string.offline_downloading,
+                formatOfflineBytes(0L)
+        ));
+        offlineStatusText.setTextColor(getColor(R.color.text_primary));
+
+        activeOfflineTask = offlineExecutor.submit(() -> {
+            OfflineMediaRecord record = null;
+            Throwable failure = null;
+            boolean cancelled = false;
+            try {
+                record = offlineDownloadManager.download(
+                        video,
+                        cancellation,
+                        (track, downloaded, total) -> mainHandler.post(
+                                () -> updateOfflineDownloadProgress(
+                                        foregroundGeneration,
+                                        cancellation,
+                                        track,
+                                        downloaded,
+                                        total
+                                )
+                        )
+                );
+            } catch (OfflineDownloadManager.DownloadCancelledException exception) {
+                cancelled = true;
+            } catch (Throwable exception) {
+                failure = exception;
+            }
+            OfflineMediaRecord completedRecord = record;
+            Throwable completedFailure = failure;
+            boolean wasCancelled = cancelled;
+            mainHandler.post(() -> finishOfflineDownload(
+                    cancellation,
+                    completedRecord,
+                    completedFailure,
+                    wasCancelled,
+                    foregroundGeneration
+            ));
+        });
+    }
+
+    private void updateOfflineDownloadProgress(
+            int foregroundGeneration,
+            OfflineDownloadManager.Cancellation cancellation,
+            OfflineDownloadManager.Track track,
+            long downloaded,
+            long total
+    ) {
+        if (destroyed
+                || cancellation != offlineDownloadCancellation
+                || !offlineDownloadInProgress
+                || !isOfflineForeground(foregroundGeneration)) {
+            return;
+        }
+        int percent = total <= 0L
+                ? 0
+                : (int) Math.min(
+                        100L,
+                        Math.round((downloaded * 100.0d) / total)
+                );
+        offlineProgress.setProgress(percent);
+        String trackName = switch (track) {
+            case PROGRESSIVE -> "video";
+            case VIDEO -> "video track";
+            case AUDIO -> "audio track";
+        };
+        offlineStatusText.setText(getString(
+                R.string.offline_downloading_track,
+                trackName,
+                formatOfflineBytes(downloaded)
+        ));
+    }
+
+    private void cancelOfflineDownload() {
+        OfflineDownloadManager.Cancellation cancellation =
+                offlineDownloadCancellation;
+        if (cancellation == null) {
+            return;
+        }
+        cancellation.cancel();
+        if (offlineSaveButton != null) {
+            offlineSaveButton.setEnabled(false);
+        }
+    }
+
+    private void finishOfflineDownload(
+            OfflineDownloadManager.Cancellation cancellation,
+            OfflineMediaRecord record,
+            Throwable failure,
+            boolean cancelled,
+            int foregroundGeneration
+    ) {
+        if (cancellation != offlineDownloadCancellation) {
+            return;
+        }
+        offlineDownloadCancellation = null;
+        activeOfflineTask = null;
+        offlineDownloadInProgress = false;
+        if (!isOfflineForeground(foregroundGeneration)) {
+            return;
+        }
+
+        offlineProgress.setVisibility(View.GONE);
+        offlineSaveButton.setText(R.string.save_offline);
+        offlineSaveButton.setOnClickListener(view -> promptOfflineSave());
+        offlineLibraryButton.setEnabled(offlineSecurityDecision().isAllowed());
+        offlineSaveButton.setEnabled(
+                activeVideo != null
+                        && OfflineDownloadEligibility.evaluate(activeVideo).isAllowed()
+                        && offlineSecurityDecision().isAllowed()
+        );
+        if (record != null) {
+            offlineStatusText.setText(R.string.offline_download_complete);
+            offlineStatusText.setTextColor(getColor(R.color.mint));
+            return;
+        }
+        if (cancelled || cancellation.isCancelled()) {
+            offlineStatusText.setText(R.string.offline_download_cancelled);
+            offlineStatusText.setTextColor(getColor(R.color.text_secondary));
+            return;
+        }
+
+        recordFailure(
+                "offline download",
+                failure == null ? "Unknown" : deepestType(failure)
+        );
+        offlineStatusText.setText(R.string.offline_download_failed);
+        offlineStatusText.setTextColor(getColor(R.color.coral));
+    }
+
+    private String formatOfflineBytes(long bytes) {
+        double kibibytes = Math.max(0L, bytes) / 1024.0d;
+        if (kibibytes < 1024.0d) {
+            return getString(R.string.offline_bytes_kb, kibibytes);
+        }
+        double mebibytes = kibibytes / 1024.0d;
+        if (mebibytes < 1024.0d) {
+            return getString(R.string.offline_bytes_mb, mebibytes);
+        }
+        return getString(R.string.offline_bytes_gb, mebibytes / 1024.0d);
+    }
+
+    private void loadOfflineLibrary() {
+        if (offlineMediaStore == null
+                || offlineDownloadInProgress
+                || !isOfflineForeground()
+                || !offlineSecurityDecision().isAllowed()) {
+            return;
+        }
+        int foregroundGeneration = offlineForegroundGeneration.get();
+        offlineStatusText.setText(R.string.offline_library_loading);
+        offlineStatusText.setTextColor(getColor(R.color.text_secondary));
+        offlineLibraryButton.setEnabled(false);
+        activeOfflineTask = offlineExecutor.submit(() -> {
+            OfflineMediaStore.ListResult result = null;
+            Throwable failure = null;
+            try {
+                result = offlineMediaStore.list(
+                        () -> isOfflineAccessCurrent(foregroundGeneration)
+                );
+            } catch (Throwable exception) {
+                failure = exception;
+            }
+            OfflineMediaStore.ListResult completedResult = result;
+            Throwable completedFailure = failure;
+            mainHandler.post(() -> {
+                if (!isOfflineForeground(foregroundGeneration)) {
+                    return;
+                }
+                activeOfflineTask = null;
+                offlineLibraryButton.setEnabled(
+                        offlineSecurityDecision().isAllowed()
+                );
+                if (completedResult == null) {
+                    showOfflineOperationFailure(completedFailure);
+                    return;
+                }
+                showOfflineLibrary(completedResult);
+                refreshOfflineControls();
+            });
+        });
+    }
+
+    private void showOfflineLibrary(OfflineMediaStore.ListResult result) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(8), dp(20), dp(8));
+
+        TextView policy = text(
+                getString(R.string.offline_library_policy),
+                12,
+                getColor(R.color.text_secondary)
+        );
+        policy.setPadding(0, 0, 0, dp(8));
+        content.addView(policy);
+
+        if (result.getRecords().isEmpty()) {
+            TextView empty = text(
+                    getString(R.string.offline_library_empty),
+                    14,
+                    getColor(R.color.text_secondary)
+            );
+            empty.setPadding(0, dp(8), 0, dp(8));
+            content.addView(empty);
+        }
+        if (result.getCorruptCount() > 0) {
+            TextView corrupt = text(
+                    getString(
+                            R.string.offline_library_corrupt,
+                            result.getCorruptCount()
+                    ),
+                    12,
+                    getColor(R.color.coral)
+            );
+            corrupt.setPadding(0, dp(8), 0, dp(8));
+            content.addView(corrupt);
+        }
+
+        AlertDialog[] dialogHolder = new AlertDialog[1];
+        for (OfflineMediaRecord record : result.getRecords()) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setPadding(0, dp(10), 0, dp(10));
+
+            TextView itemTitle = text(
+                    record.getTitle(),
+                    15,
+                    getColor(R.color.text_primary)
+            );
+            itemTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            itemTitle.setMaxLines(2);
+            row.addView(itemTitle);
+
+            long storedPlaintextBytes = record.getVideoPlaintextLength()
+                    + record.getAudioPlaintextLength();
+            String quality = record.getSelectedHeight() > 0
+                    ? record.getSelectedHeight() + "p • "
+                    : "";
+            String uploader = record.getUploader().isEmpty()
+                    ? getString(R.string.offline_unknown_uploader)
+                    : record.getUploader();
+            TextView itemDetail = text(
+                    uploader + " • " + quality
+                            + formatOfflineBytes(storedPlaintextBytes),
+                    12,
+                    getColor(R.color.text_secondary)
+            );
+            itemDetail.setPadding(0, dp(4), 0, 0);
+            row.addView(itemDetail);
+
+            LinearLayout actions = new LinearLayout(this);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+            actions.setGravity(Gravity.END);
+            Button delete = textButton(getString(R.string.offline_delete));
+            delete.setOnClickListener(view -> {
+                if (dialogHolder[0] != null) {
+                    dialogHolder[0].dismiss();
+                }
+                confirmDeleteOfflineItem(record);
+            });
+            actions.addView(delete, new LinearLayout.LayoutParams(wrap(), dp(44)));
+            Button play = primaryButton(getString(R.string.offline_play));
+            play.setOnClickListener(view -> {
+                if (dialogHolder[0] != null) {
+                    dialogHolder[0].dismiss();
+                }
+                requestOfflineCredential(
+                        PendingOfflineAction.PLAY_ITEM,
+                        record.getItemId()
+                );
+            });
+            LinearLayout.LayoutParams playParams =
+                    new LinearLayout.LayoutParams(wrap(), dp(44));
+            playParams.setMargins(dp(8), 0, 0, 0);
+            actions.addView(play, playParams);
+            row.addView(actions);
+            content.addView(row);
+        }
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content, matchParentWrap());
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.offline_library_title)
+                .setView(scroll)
+                .setNeutralButton(
+                        R.string.offline_reset,
+                        (ignoredDialog, ignoredWhich) ->
+                                confirmResetOfflineVault()
+                )
+                .setPositiveButton(android.R.string.ok, null)
+                .create();
+        dialogHolder[0] = dialog;
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    .setTextColor(getColor(R.color.coral));
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+                    .setTextColor(getColor(R.color.text_secondary));
+        });
+        dialog.show();
+    }
+
+    private void confirmDeleteOfflineItem(OfflineMediaRecord record) {
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.offline_delete_title)
+                .setMessage(R.string.offline_delete_message)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(
+                        R.string.offline_delete_confirm,
+                        (ignoredDialog, ignoredWhich) ->
+                                deleteOfflineItem(record.getItemId())
+                )
+                .create();
+        dialog.setOnShowListener(ignored -> dialog
+                .getButton(AlertDialog.BUTTON_POSITIVE)
+                .setTextColor(getColor(R.color.coral)));
+        dialog.show();
+    }
+
+    private void deleteOfflineItem(UUID itemId) {
+        if (activeOfflineRecord != null
+                && activeOfflineRecord.getItemId().equals(itemId)) {
+            clearActiveOfflinePlayback(false);
+        }
+        offlineExecutor.execute(() -> {
+            boolean deleted = false;
+            try {
+                deleted = offlineMediaStore != null
+                        && offlineMediaStore.delete(itemId);
+            } catch (Exception ignored) {
+                // The user-facing result is intentionally generic.
+            }
+            boolean completed = deleted;
+            mainHandler.post(() -> {
+                if (!destroyed) {
+                    Toast.makeText(
+                            this,
+                            completed
+                                    ? R.string.offline_delete_complete
+                                    : R.string.offline_delete_failed,
+                            Toast.LENGTH_LONG
+                    ).show();
+                    refreshOfflineControls();
+                }
+            });
+        });
+    }
+
+    private void confirmResetOfflineVault() {
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.offline_reset_title)
+                .setMessage(R.string.offline_reset_message)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(
+                        R.string.offline_reset_confirm,
+                        (ignoredDialog, ignoredWhich) -> resetOfflineVault()
+                )
+                .create();
+        dialog.setOnShowListener(ignored -> dialog
+                .getButton(AlertDialog.BUTTON_POSITIVE)
+                .setTextColor(getColor(R.color.coral)));
+        dialog.show();
+    }
+
+    private void resetOfflineVault() {
+        cancelOfflineDownload();
+        clearActiveOfflinePlayback(false);
+        offlineExecutor.execute(() -> {
+            boolean reset = false;
+            try {
+                if (offlineMediaStore != null) {
+                    offlineMediaStore.reset();
+                    reset = true;
+                }
+            } catch (Exception ignored) {
+                // The user-facing result is intentionally generic.
+            }
+            boolean completed = reset;
+            mainHandler.post(() -> {
+                if (!destroyed) {
+                    Toast.makeText(
+                            this,
+                            completed
+                                    ? R.string.offline_reset_complete
+                                    : R.string.offline_delete_failed,
+                            Toast.LENGTH_LONG
+                    ).show();
+                    refreshOfflineControls();
+                }
+            });
+        });
+    }
+
+    private void showOfflineUnavailable(String reason) {
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.offline_library_title)
+                .setMessage(getString(
+                        R.string.offline_security_unavailable,
+                        reason
+                ))
+                .setNegativeButton(android.R.string.cancel, null)
+                .setNeutralButton(
+                        R.string.offline_reset,
+                        (ignoredDialog, ignoredWhich) ->
+                                confirmResetOfflineVault()
+                )
+                .create();
+        dialog.setOnShowListener(ignored -> dialog
+                .getButton(AlertDialog.BUTTON_NEUTRAL)
+                .setTextColor(getColor(R.color.coral)));
+        dialog.show();
+    }
+
+    private void showOfflineOperationFailure(Throwable failure) {
+        recordFailure(
+                "offline storage",
+                failure == null ? "Unknown" : deepestType(failure)
+        );
+        offlineStatusText.setText(R.string.offline_integrity_error);
+        offlineStatusText.setTextColor(getColor(R.color.coral));
+        showOfflineUnavailable(getString(R.string.offline_integrity_error));
+    }
+
+    private void openOfflineItem(UUID itemId) {
+        if (offlineMediaStore == null
+                || !isOfflineForeground()
+                || !offlineSecurityDecision().isAllowed()) {
+            return;
+        }
+        int foregroundGeneration = offlineForegroundGeneration.get();
+        offlineStatusText.setText(R.string.offline_playback_preparing);
+        offlineStatusText.setTextColor(getColor(R.color.text_secondary));
+        activeOfflineTask = offlineExecutor.submit(() -> {
+            OfflineMediaStore.PlaybackSession session = null;
+            Throwable failure = null;
+            try {
+                session = offlineMediaStore.open(
+                        itemId,
+                        () -> isOfflineAccessCurrent(foregroundGeneration)
+                );
+            } catch (Throwable exception) {
+                failure = exception;
+            }
+            OfflineMediaStore.PlaybackSession openedSession = session;
+            Throwable completedFailure = failure;
+            mainHandler.post(() -> {
+                if (!isOfflineForeground(foregroundGeneration)) {
+                    if (openedSession != null) {
+                        openedSession.close();
+                    }
+                    return;
+                }
+                activeOfflineTask = null;
+                if (openedSession == null) {
+                    showOfflineOperationFailure(completedFailure);
+                    return;
+                }
+                beginOfflinePlayback(openedSession);
+            });
+        });
+    }
+
+    private void beginOfflinePlayback(
+            OfflineMediaStore.PlaybackSession session
+    ) {
+        if (!isOfflineForeground()
+                || !offlineSecurityDecision().isAllowed()) {
+            session.close();
+            return;
+        }
+        OfflineMediaRecord record = session.getRecord();
+        int generation = loadGeneration.incrementAndGet();
+        playlistLoadGeneration.incrementAndGet();
+        cancelTask(activeVideoResolveTask);
+        cancelTask(activePlaylistResolveTask);
+        activeVideoResolveTask = null;
+        activePlaylistResolveTask = null;
+
+        clearActiveOfflinePlayback(false);
+        player.stop();
+        player.clearMediaItems();
+        playlistQueue = null;
+        playlistCard.setVisibility(View.GONE);
+        activeUrl = null;
+        sourceUrl = null;
+        activeVideo = null;
+        activeOfflineRecord = record;
+        offlinePlaybackSession = session;
+        selectedMediaPrepared = false;
+        handledEndGeneration = -1;
+        preparedPlaybackGeneration = generation;
+        pendingSeekMs = PlaybackSessionState.NO_PENDING_SEEK;
+        pendingRestoreVideoId = null;
+        pendingRestorePlaylistIndex = -1;
+        playbackSessionState.requestPlayWhenReady(true);
+        retriedAfterPlaybackFailure = false;
+        clearFailure();
+        errorCard.setVisibility(View.GONE);
+        loadingIndicator.setVisibility(View.VISIBLE);
+        titleText.setText(record.getTitle());
+        if (record.getUploader().isEmpty()) {
+            uploaderText.setText(R.string.offline_unknown_uploader);
+        } else {
+            uploaderText.setText(record.getUploader());
+        }
+        playbackStatus.setText(R.string.offline_playback_preparing);
+        resetItemProtection();
+        fetchSponsorSegments(record.getVideoId(), generation);
+
+        try {
+            MediaSource source = playbackSourceFactory.createOffline(session);
+            player.setMediaSource(source);
+            selectedMediaPrepared = true;
+            player.setPlayWhenReady(playbackSessionState.shouldPlayWhenReady());
+            player.prepare();
+            offlineStatusText.setText(R.string.offline_playback_ready);
+            offlineStatusText.setTextColor(getColor(R.color.mint));
+        } catch (Exception exception) {
+            recordFailure("offline playback", deepestType(exception));
+            clearActiveOfflinePlayback(false);
+            showError(getString(R.string.offline_integrity_error));
+        }
+        refreshOfflineControls();
+    }
+
+    private void clearActiveOfflinePlayback(boolean locked) {
+        OfflineMediaStore.PlaybackSession session = offlinePlaybackSession;
+        if (session == null && activeOfflineRecord == null) {
+            return;
+        }
+        if (session != null) {
+            player.stop();
+            player.clearMediaItems();
+            session.close();
+        }
+        offlinePlaybackSession = null;
+        selectedMediaPrepared = false;
+        preparedPlaybackGeneration = -1;
+        if (locked && activeOfflineRecord != null) {
+            if (offlineStatusText != null) {
+                offlineStatusText.setText(R.string.offline_playback_locked);
+                offlineStatusText.setTextColor(getColor(R.color.coral));
+            }
+            if (playbackStatus != null) {
+                playbackStatus.setText(R.string.offline_playback_locked);
+            }
+        } else {
+            activeOfflineRecord = null;
+        }
+    }
+
     private void playInput() {
         YouTubeUrlParser.PlayableLink link =
                 YouTubeUrlParser.parsePlayable(linkInput.getText().toString());
@@ -740,6 +1679,8 @@ public final class MainActivity extends ComponentActivity {
             String requestedVideoId,
             PlaybackStartReason reason
     ) {
+        cancelOfflineDownload();
+        clearPendingOfflineCredential();
         sourceUrl = link.getCanonicalUrl();
         if (link.isPlaylist()) {
             String preferredVideoId = requestedVideoId == null
@@ -768,6 +1709,8 @@ public final class MainActivity extends ComponentActivity {
             String preferredVideoId,
             PlaybackStartReason reason
     ) {
+        cancelOfflineDownload();
+        clearPendingOfflineCredential();
         int playlistGeneration = playlistLoadGeneration.incrementAndGet();
         int invalidatedVideoGeneration = loadGeneration.incrementAndGet();
         handledEndGeneration = invalidatedVideoGeneration;
@@ -776,9 +1719,11 @@ public final class MainActivity extends ComponentActivity {
         activePlaylistResolveTask = null;
         activeVideoResolveTask = null;
 
+        clearActiveOfflinePlayback(false);
         playlistQueue = null;
         activeUrl = null;
         activeVideo = null;
+        refreshOfflineControls();
         selectedMediaPrepared = false;
         retriedAfterPlaybackFailure = false;
         player.stop();
@@ -854,6 +1799,8 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void startPlayback(String canonicalUrl, PlaybackStartReason reason) {
+        cancelOfflineDownload();
+        clearPendingOfflineCredential();
         String videoId = YouTubeUrlParser.extractVideoId(canonicalUrl);
         if (videoId == null) {
             recordFailure("link validation", "Invalid or unsupported YouTube link");
@@ -861,6 +1808,7 @@ public final class MainActivity extends ComponentActivity {
             return;
         }
 
+        clearActiveOfflinePlayback(false);
         boolean retry = reason == PlaybackStartReason.RETRY;
         if (reason == PlaybackStartReason.RESTORE) {
             pendingSeekMs = PlaybackSessionState.seekForRestoredVideo(
@@ -887,6 +1835,7 @@ public final class MainActivity extends ComponentActivity {
         activeVideoResolveTask = null;
         activeUrl = canonicalUrl;
         activeVideo = null;
+        refreshOfflineControls();
         selectedMediaPrepared = false;
         errorCard.setVisibility(View.GONE);
         loadingIndicator.setVisibility(View.VISIBLE);
@@ -952,6 +1901,7 @@ public final class MainActivity extends ComponentActivity {
 
     private void beginResolvedPlayback(ResolvedVideo resolved, int generation) {
         activeVideo = resolved;
+        refreshOfflineControls();
         preparedPlaybackGeneration = generation;
         titleText.setText(resolved.getTitle());
         uploaderText.setText(
@@ -972,6 +1922,25 @@ public final class MainActivity extends ComponentActivity {
             return;
         }
         handledEndGeneration = generation;
+
+        if (activeOfflineRecord != null) {
+            OfflineMediaStore.PlaybackSession session = offlinePlaybackSession;
+            player.clearMediaItems();
+            if (session != null) {
+                session.close();
+            }
+            offlinePlaybackSession = null;
+            selectedMediaPrepared = false;
+            preparedPlaybackGeneration = -1;
+            playbackStatus.setText("Finished");
+            offlineStatusText.setText(R.string.offline_download_complete);
+            offlineStatusText.setTextColor(getColor(R.color.mint));
+            offlineSaveButton.setEnabled(false);
+            offlineLibraryButton.setEnabled(
+                    offlineSecurityDecision().isAllowed()
+            );
+            return;
+        }
 
         if (playlistQueue != null && playlistQueue.next()) {
             startCurrentPlaylistItem(PlaybackStartReason.PLAYLIST_ITEM);
@@ -1047,6 +2016,53 @@ public final class MainActivity extends ComponentActivity {
     private static void cancelTask(Future<?> task) {
         if (task != null) {
             task.cancel(true);
+        }
+    }
+
+    private boolean isOfflineForeground() {
+        return isOfflineForeground(offlineForegroundGeneration.get());
+    }
+
+    private boolean isOfflineForeground(int expectedGeneration) {
+        return isOfflineAccessCurrent(expectedGeneration)
+                && !activityUnavailable()
+                && getLifecycle()
+                        .getCurrentState()
+                        .isAtLeast(Lifecycle.State.RESUMED);
+    }
+
+    private boolean isOfflineAccessCurrent(int expectedGeneration) {
+        return expectedGeneration == offlineForegroundGeneration.get()
+                && !destroyed;
+    }
+
+    private void revokeOfflineForegroundAccess() {
+        offlineForegroundGeneration.incrementAndGet();
+        OfflineDownloadManager.Cancellation cancellation =
+                offlineDownloadCancellation;
+        if (cancellation != null) {
+            cancellation.cancel();
+        }
+        cancelTask(activeOfflineTask);
+        activeOfflineTask = null;
+        offlineDownloadCancellation = null;
+        offlineDownloadInProgress = false;
+        if (offlineMediaStore != null) {
+            offlineMediaStore.revokeAllPlayback();
+        }
+        clearActiveOfflinePlayback(true);
+
+        if (offlineProgress != null) {
+            offlineProgress.setVisibility(View.GONE);
+            offlineProgress.setProgress(0);
+        }
+        if (offlineSaveButton != null) {
+            offlineSaveButton.setText(R.string.save_offline);
+            offlineSaveButton.setOnClickListener(view -> promptOfflineSave());
+            offlineSaveButton.setEnabled(false);
+        }
+        if (offlineLibraryButton != null) {
+            offlineLibraryButton.setEnabled(false);
         }
     }
 
@@ -1175,6 +2191,22 @@ public final class MainActivity extends ComponentActivity {
             );
             content.addView(availableUpdateRow);
         }
+
+        TextView offlineUseLabel = text(
+                getString(R.string.offline_use_section),
+                11,
+                getColor(R.color.text_secondary)
+        );
+        offlineUseLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        offlineUseLabel.setPadding(0, dp(20), 0, dp(3));
+        content.addView(offlineUseLabel);
+        TextView offlineUsePolicy = text(
+                getString(R.string.offline_use_policy),
+                12,
+                getColor(R.color.text_secondary)
+        );
+        offlineUsePolicy.setPadding(0, 0, 0, dp(8));
+        content.addView(offlineUsePolicy);
 
         TextView section = text("SKIP CATEGORIES", 11, getColor(R.color.text_secondary));
         section.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -1861,6 +2893,14 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private String resolvedStreamName() {
+        if (activeOfflineRecord != null) {
+            int height = activeOfflineRecord.getSelectedHeight();
+            String quality = height > 0 ? " / " + height + "p" : "";
+            return "device-locked offline / "
+                    + activeOfflineRecord.getSourceType().name()
+                    .toLowerCase(Locale.US)
+                    + quality;
+        }
         if (activeVideo == null) {
             return activeUrl == null ? "None" : "Not resolved";
         }
@@ -2252,6 +3292,34 @@ public final class MainActivity extends ComponentActivity {
     }
 
     @Override
+    protected void onActivityResult(
+            int requestCode,
+            int resultCode,
+            Intent data
+    ) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_OFFLINE_CREDENTIAL) {
+            return;
+        }
+        awaitingOfflineCredential = false;
+        if (resultCode == RESULT_OK) {
+            if (pendingOfflineAction == PendingOfflineAction.NONE) {
+                clearPendingOfflineCredential();
+                return;
+            }
+            offlineCredentialApproved = true;
+            mainHandler.post(this::performApprovedOfflineActionIfResumed);
+            return;
+        }
+        clearPendingOfflineCredential();
+        Toast.makeText(
+                this,
+                R.string.offline_auth_cancelled,
+                Toast.LENGTH_SHORT
+        ).show();
+    }
+
+    @Override
     public void onRequestPermissionsResult(
             int requestCode,
             String[] permissions,
@@ -2282,6 +3350,8 @@ public final class MainActivity extends ComponentActivity {
             UpdateScheduler.checkNow(this);
         }
         updateNotificationsWereAllowed = notificationsAllowed;
+        refreshOfflineControls();
+        mainHandler.post(this::performApprovedOfflineActionIfResumed);
     }
 
     @Override
@@ -2293,8 +3363,23 @@ public final class MainActivity extends ComponentActivity {
     }
 
     @Override
+    protected void onPause() {
+        boolean credentialPromptInFlight = awaitingOfflineCredential;
+        revokeOfflineForegroundAccess();
+        if (!credentialPromptInFlight) {
+            clearPendingOfflineCredential();
+        }
+        super.onPause();
+    }
+
+    @Override
     protected void onStop() {
         updateDownloadVerificationGeneration.incrementAndGet();
+        boolean credentialPromptInFlight = awaitingOfflineCredential;
+        revokeOfflineForegroundAccess();
+        if (!credentialPromptInFlight) {
+            clearPendingOfflineCredential();
+        }
         skipController.stop();
         playbackSessionState.onStop();
         player.setPlayWhenReady(false);
@@ -2304,6 +3389,8 @@ public final class MainActivity extends ComponentActivity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        revokeOfflineForegroundAccess();
+        clearPendingOfflineCredential();
         loadGeneration.incrementAndGet();
         playlistLoadGeneration.incrementAndGet();
         mainHandler.removeCallbacksAndMessages(null);
@@ -2312,6 +3399,7 @@ public final class MainActivity extends ComponentActivity {
         videoResolverExecutor.shutdownNow();
         playlistResolverExecutor.shutdownNow();
         updateCheckExecutor.shutdownNow();
+        offlineExecutor.shutdownNow();
         activeSettingsDialog = null;
         activeUpdateCheckDetail = null;
         activeUpdateCheckAction = null;
@@ -2473,6 +3561,13 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private String statusForReadyVideo() {
+        if (activeOfflineRecord != null) {
+            int offlineHeight = activeOfflineRecord.getSelectedHeight();
+            return offlineHeight > 0
+                    ? getString(R.string.offline_playback_ready)
+                            + " • " + offlineHeight + "p"
+                    : getString(R.string.offline_playback_ready);
+        }
         if (activeVideo == null) {
             return "Ad-free playback";
         }

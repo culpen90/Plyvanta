@@ -138,7 +138,7 @@ To exercise the next-version package locally with the protected macOS signing
 setup:
 
 ```sh
-scripts/package-semantic-release.sh 1.2.1
+scripts/package-semantic-release.sh 1.3.0
 ```
 
 This produces and verifies ignored build outputs only. It does not create a tag
