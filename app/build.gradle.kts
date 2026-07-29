@@ -203,7 +203,7 @@ abstract class VerifyApkSigner @Inject constructor(
 }
 
 val baseVersionName = providers.gradleProperty("plyvantaVersionName")
-    .orElse("1.2.1")
+    .orElse("1.3.0")
     .get()
 if (!Regex("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
         .matches(baseVersionName)
@@ -214,7 +214,7 @@ if (!Regex("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
 }
 val baseApplicationId = "app.plyvanta"
 val appVersionCodeText = providers.gradleProperty("plyvantaVersionCode")
-    .orElse("1002001")
+    .orElse("1003000")
     .get()
 val appVersionCode = appVersionCodeText.toIntOrNull()
     ?: throw GradleException("plyvantaVersionCode must be an integer.")

@@ -10,10 +10,16 @@ import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.source.MediaSource;
 import androidx.media3.exoplayer.source.MergingMediaSource;
+import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 
+import java.io.IOException;
 import java.util.Map;
 
 import app.plyvanta.extractor.OkHttpDownloader;
+import app.plyvanta.offline.EncryptedChunkFile;
+import app.plyvanta.offline.EncryptedMediaDataSource;
+import app.plyvanta.offline.OfflineMediaRecord;
+import app.plyvanta.offline.OfflineMediaStore;
 
 @UnstableApi
 public final class PlaybackSourceFactory {
@@ -53,6 +59,37 @@ public final class PlaybackSourceFactory {
         );
         MediaSource audio = mediaSourceFactory.createMediaSource(audioItem);
         return new MergingMediaSource(primary, audio);
+    }
+
+    public MediaSource createOffline(OfflineMediaStore.PlaybackSession session)
+            throws IOException {
+        OfflineMediaRecord record = session.getRecord();
+        EncryptedMediaDataSource.Factory dataSourceFactory =
+                new EncryptedMediaDataSource.Factory(session);
+        ProgressiveMediaSource.Factory sourceFactory =
+                new ProgressiveMediaSource.Factory(dataSourceFactory);
+
+        EncryptedChunkFile.TrackRole videoRole =
+                record.getSourceType() == OfflineMediaRecord.SourceType.PROGRESSIVE
+                        ? EncryptedChunkFile.TrackRole.PROGRESSIVE
+                        : EncryptedChunkFile.TrackRole.VIDEO;
+        MediaSource video = sourceFactory.createMediaSource(mediaItem(
+                session.uriFor(videoRole),
+                record.getVideoMimeType(),
+                record.getTitle(),
+                record.getUploader()
+        ));
+        if (record.getSourceType() == OfflineMediaRecord.SourceType.PROGRESSIVE) {
+            return video;
+        }
+
+        MediaSource audio = sourceFactory.createMediaSource(mediaItem(
+                session.uriFor(EncryptedChunkFile.TrackRole.AUDIO),
+                record.getAudioMimeType(),
+                record.getTitle(),
+                record.getUploader()
+        ));
+        return new MergingMediaSource(video, audio);
     }
 
     private static MediaItem mediaItem(

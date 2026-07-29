@@ -9,7 +9,7 @@ sponsored sections inside each video.
 Plyvanta does not modify the YouTube app and is not a system-wide ad blocker.
 Playback must happen inside Plyvanta.
 
-## Download
+## Install Plyvanta
 
 Production-signed stable builds are available from
 [GitHub Releases](https://github.com/Plyvanta/Plyvanta/releases). Download the
@@ -40,6 +40,9 @@ user to allow notifications.
   automatically, and provides **Previous** and **Next** controls.
 - Plays progressive, separate audio/video, HLS, or DASH media with AndroidX
   Media3.
+- Official upstream releases save technically eligible finite videos for authorized
+  personal offline playback in an encrypted, device-bound private vault with no
+  share, export, cast, backup, or migration path.
 - Avoids the ad slots used by the official player by requesting the video's
   direct content stream.
 - Fetches crowdsourced SponsorBlock segments and automatically seeks over enabled
@@ -73,6 +76,64 @@ media stream, and loads the available SponsorBlock segments independently. When
 an enabled segment is reached, playback seeks to its end and briefly offers
 **Undo**.
 
+### Secure offline playback
+
+#### Why the restrictions are so strict
+
+Plyvanta is already an unofficial client that resolves direct media streams
+from a third-party source service. Adding reusable media files increases the
+project's copyright and service-terms risk. The applicable service terms may
+restrict accessing, reproducing, downloading, or distributing content unless
+the service and relevant rights holders permit it. Copyright owners also
+generally hold exclusive reproduction and distribution rights, subject to legal
+exceptions; the
+[U.S. Copyright Office overview](https://copyright.gov/what-is-copyright/)
+provides one jurisdiction's summary.
+
+Official Plyvanta therefore offers downloading only for authorized personal
+offline entertainment. Personal or noncommercial use is the project's intended
+use, not an assurance that a download is permitted. The feature is deliberately
+not a general-purpose downloader: device binding, encryption, and the absence of
+app-provided playable-file access, export, share, cast, backup, and migration
+paths are meant to keep the official app from becoming a convenient way to
+redistribute free copies of media that may be protected by copyright.
+
+Plyvanta is open source under GPLv3, so another person can fork the code and
+remove these safeguards, subject to the license and applicable law. The
+source-code license grants rights in Plyvanta's code, not rights to download or
+redistribute third-party media, and a modified fork's choices are not official
+upstream policy. That possibility does not make the upstream controls
+pointless. Official source, builds, and accepted contributions retain a
+meaningful technical and intentional barrier against redistribution. This is a
+project policy and risk-reduction measure, not legal advice or a claim that the
+controls make any particular download lawful.
+
+While a technically eligible finite video is loaded, tap **Save offline**,
+affirm that the platform's terms and applicable law permit you to download that
+content, and confirm the device credential.
+Keep Plyvanta in the foreground until encryption finishes; leaving the app
+cancels the network request and removes the incomplete item. Tap **Downloads**
+and confirm the device credential again to list or play saved items. The
+library offers only playback and deletion—there is no app-provided
+playable-file access, share, save-as, cast, backup, migration, or recovery
+action.
+
+Offline storage is deliberately stricter than ordinary streaming. It is
+available only in a non-debuggable production build on Android 9 or newer with
+a secure device lock, StrongBox security hardware, and the app's integrity
+checks passing. Finite progressive streams and finite separate audio/video
+pairs are eligible; live, upcoming, HLS, and DASH sources are rejected. If any
+required control is unavailable, Plyvanta leaves offline storage disabled
+instead of using weaker protection.
+
+Saved tracks are encrypted directly into 256 KiB authenticated chunks in the
+app's no-backup private storage. Each item has an independent content key, and
+only the same device's non-exportable, StrongBox-backed Android Keystore key can
+unwrap it after device authentication. Plaintext media is supplied to Media3
+from small authenticated memory buffers and is never written as a playable
+file. Leaving the foreground closes active readers and clears their keys and
+decrypted buffers.
+
 To report a problem, open **Settings → Report a bug**. The support action and
 installed app version appear at the top of Settings so the active build can be
 checked immediately. Playback errors also show **Report this issue** next to the
@@ -82,6 +143,8 @@ issue or the Android share sheet.
 ## Requirements
 
 - Android 8.0 (API 26) or later
+- Secure offline playback additionally requires Android 9 (API 28), a
+  production build, secure device lock, and StrongBox hardware
 - JDK 21 for local builds
 - Android SDK Platform 36
 
@@ -103,14 +166,14 @@ previews cannot be confused. It also writes the release metadata that future
 installed versions require before trusting an update:
 
 ```text
-app/build/outputs/preview/Plyvanta-1.2.1-debug.4.apk
-app/build/outputs/preview/Plyvanta-1.2.1-debug.4-update.json
+app/build/outputs/preview/Plyvanta-1.3.0-debug.4.apk
+app/build/outputs/preview/Plyvanta-1.3.0-debug.4-update.json
 ```
 
 Install it on a connected device or emulator with:
 
 ```sh
-adb install -r app/build/outputs/preview/Plyvanta-1.2.1-debug.4.apk
+adb install -r app/build/outputs/preview/Plyvanta-1.3.0-debug.4.apk
 ```
 
 With one emulator or device connected, verify the exact packaged artifact before
@@ -118,8 +181,8 @@ distribution:
 
 ```sh
 scripts/smoke-test-apk.sh \
-  app/build/outputs/preview/Plyvanta-1.2.1-debug.4.apk \
-  app/build/outputs/preview/Plyvanta-1.2.1-debug.4-update.json \
+  app/build/outputs/preview/Plyvanta-1.3.0-debug.4.apk \
+  app/build/outputs/preview/Plyvanta-1.3.0-debug.4-update.json \
   f316b684e87b4df6deb4c9fc987e530e7c3fae9810e6a3371b0cc0ea05f179f1
 ```
 
@@ -173,8 +236,8 @@ The task refuses a partially configured signing identity and writes the three
 upload-ready assets to:
 
 ```text
-app/build/outputs/stable/Plyvanta-1.2.1.apk
-app/build/outputs/stable/Plyvanta-1.2.1-update.json
+app/build/outputs/stable/Plyvanta-1.3.0.apk
+app/build/outputs/stable/Plyvanta-1.3.0-update.json
 app/build/outputs/stable/SHA256SUMS
 ```
 
@@ -182,8 +245,8 @@ Before distribution, install and exercise the exact packaged artifact:
 
 ```sh
 scripts/smoke-test-apk.sh \
-  app/build/outputs/stable/Plyvanta-1.2.1.apk \
-  app/build/outputs/stable/Plyvanta-1.2.1-update.json \
+  app/build/outputs/stable/Plyvanta-1.3.0.apk \
+  app/build/outputs/stable/Plyvanta-1.3.0-update.json \
   2085e2b0c5bbd6273203f2aa0064b0f6f291a43746f9989dd0cea30e6cec4d8e
 ```
 
@@ -220,7 +283,21 @@ Plyvanta is a single-activity Java Android app:
   otherwise separate audio/video, HLS, or DASH.
 - `OkHttpDownloader` is the network adapter used by NewPipe Extractor.
 - `PlaybackSourceFactory` maps resolved streams to Media3 sources and merges
-  separate audio and video when necessary.
+  separate audio and video when necessary, including opaque encrypted offline
+  sources.
+- `OfflineDownloadManager` accepts only bounded finite media responses from
+  trusted HTTPS delivery hosts and streams them directly into an encrypted
+  download session.
+- `OfflineMediaStore`, `EncryptedChunkFile`, and
+  `EncryptedMediaDataSource` own the no-backup vault, authenticated random
+  access, lifecycle-bound readers, and atomic item publication. Every activity
+  uses one process-wide store so multi-window instances cannot bypass active
+  download, playback, reset, or cleanup coordination.
+- `DeviceBoundKeyManager` wraps each random item key with a StrongBox-only,
+  device-authenticated Android Keystore key; `OfflineSecurityPolicy` disables
+  the feature when its fail-closed device and build requirements are not met.
+- `PlaybackProtection` installs secure-window, secure-surface, overlay, recents,
+  screen-sharing, and audio-capture defenses before protected playback.
 - `SponsorBlockClient` hashes the video ID, performs a K-anonymous hash-prefix
   request, validates the matching response locally, and returns normalized skip
   ranges.
@@ -260,6 +337,14 @@ in memory and contains only public page metadata, never direct media URLs.
 Android cloud backup and device-to-device transfer are disabled for Plyvanta's
 app data.
 
+Saved offline metadata and media are retained only until the user deletes an
+item, resets the vault, clears app data, or uninstalls Plyvanta. They live in
+the app's no-backup private directory as authenticated ciphertext and a
+device-bound wrapped key; direct media URLs and plaintext tracks are not
+persisted. Resetting the vault deletes the wrapping key first, intentionally
+making any leftover ciphertext unrecoverable. Plyvanta has no recovery,
+escrow, export, or device-migration key.
+
 Bug reports are entirely user-initiated. Plyvanta creates the report locally and
 shows its full text before handing anything to another app or website. Technical
 details are off by default; if selected, they include only the app version and
@@ -292,9 +377,12 @@ Playing a link makes these network requests:
 - **YouTube and its media hosts:** For a playlist, NewPipe Extractor first
   requests its public metadata and continuation pages. It then requests each
   selected video's public page/player metadata only when that item is ready to
-  play, and Media3 requests the selected direct stream. YouTube and its delivery
-  providers therefore receive the network address and ordinary request metadata
-  needed to serve the playlist and videos.
+  play, and Media3 requests the selected direct stream. If the user explicitly
+  saves an eligible video, Plyvanta requests that selected finite stream again
+  while the app remains in the foreground and encrypts the response directly
+  into private storage. The source service and its delivery providers therefore
+  receive the network address and ordinary request metadata needed to serve the
+  playlist and videos.
 - **SponsorBlock:** Plyvanta computes the SHA-256 hash of the video ID and sends
   only the first four hexadecimal characters to SponsorBlock's hash-prefix API.
   This places the lookup in a bucket with other video IDs. The full hash is
@@ -336,6 +424,18 @@ can still observe requests according to their own privacy practices.
   segments, incomplete segments, or inaccurate timing.
 - Direct media URLs expire. Plyvanta retries a failed stream once, but a link may
   still need to be opened again.
+- Secure offline storage raises the cost of copying Plyvanta's saved files and
+  makes those ciphertext files unusable on another device, but no Android app
+  can make displayed or audible media literally impossible to copy. A
+  compromised operating system or privileged capture tool may bypass app
+  controls, and a camera, microphone, or external capture device can record
+  playback. The same public video can also be fetched independently outside
+  Plyvanta.
+- Offline downloads are unavailable in debug builds and on devices without the
+  required StrongBox and integrity posture. Live, HLS, DASH, and unbounded
+  sources remain streaming-only. Device loss, app uninstall, key invalidation,
+  or storage corruption can make saved items permanently unrecoverable by
+  design.
 - Update notifications are periodic rather than real-time and can be delayed by
   Android battery, network, app-standby, notification-permission, or force-stop
   behavior.
@@ -348,6 +448,10 @@ can still observe requests according to their own privacy practices.
 
 Plyvanta is distributed under the GNU General Public License, version 3. See
 [LICENSE](LICENSE).
+
+That software license grants rights in Plyvanta's source code. It does not grant
+permission to download, copy, or redistribute videos, audio, or other
+third-party media.
 
 This license is required in particular by the app's use of
 [NewPipe Extractor](https://github.com/TeamNewPipe/NewPipeExtractor), which is

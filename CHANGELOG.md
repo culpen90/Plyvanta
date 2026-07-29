@@ -12,6 +12,13 @@ their immutable GitHub Release notes.
   Previous/Next controls.
 - Added playlist position and partial-queue status, per-video SponsorBlock
   refresh, and process-state restoration without storing expiring media URLs.
+- Added authorized personal offline playback in a StrongBox-backed,
+  device-bound encrypted vault with no app-provided export, share, cast, backup,
+  migration, or recovery path.
+- Added a mandatory pre-download acknowledgement explaining the project's
+  copyright and platform-terms risk, anti-redistribution purpose, and official
+  upstream policy while acknowledging that modified open-source forks may
+  remove or change the safeguards.
 
 ## 1.0.0 - 2026-07-26
 
