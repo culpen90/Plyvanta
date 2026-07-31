@@ -58,12 +58,12 @@
     <string name="update_available_detail">Version %1$s is ready to download from GitHub</string>
     <string name="download">Download</string>
     <string name="update_dialog_title">Plyvanta %1$s is available</string>
-    <string name="update_dialog_message">Download the compatible APK from the official Plyvanta GitHub release. Android may ask which browser to use and whether it can install apps.</string>
-    <string name="download_update">Download update</string>
+    <string name="update_dialog_message">Open the verified GitHub release in your browser, then tap the APK under Assets. If you cancel the browser’s download prompt, you can retry from the same page.</string>
+    <string name="download_update">Open GitHub release</string>
     <string name="update_download_verifying">Verifying this update with GitHub…</string>
     <string name="update_download_verification_error">Couldn’t verify this update. Check your connection and try again.</string>
     <string name="later">Later</string>
-    <string name="no_app_for_update">No app is available to download this update.</string>
+    <string name="no_app_for_update">No browser is available to open this update.</string>
     <string name="update_notification_channel">App updates</string>
     <string name="update_notification_channel_detail">New compatible Plyvanta versions published on GitHub</string>
     <string name="update_notification_title">Plyvanta update available</string>

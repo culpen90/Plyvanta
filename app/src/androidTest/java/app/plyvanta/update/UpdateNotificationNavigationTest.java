@@ -106,7 +106,7 @@ public final class UpdateNotificationNavigationTest {
     }
 
     @Test
-    public void notificationOpensUpdateInColdAndWarmActivityThenDownloadsTrustedApk()
+    public void notificationOpensUpdateInColdAndWarmActivityThenOpensReleaseInBrowser()
             throws Exception {
         UpdateRelease release = newerSyntheticRelease();
         installFakeReleaseSource(release);
@@ -148,18 +148,23 @@ public final class UpdateNotificationNavigationTest {
         assertNull(readActivityIntentAction(activity));
         assertSame(activity, resumedMainActivity());
 
-        CapturingActivityMonitor downloadMonitor = new CapturingActivityMonitor();
-        instrumentation.addMonitor(downloadMonitor);
+        CapturingActivityMonitor browserMonitor = new CapturingActivityMonitor();
+        instrumentation.addMonitor(browserMonitor);
         try {
             assertTrue(clickText(context.getString(R.string.download_update)));
-            assertTrue(waitForMonitorHit(downloadMonitor));
-            Intent downloadIntent = downloadMonitor.capturedIntent();
-            assertNotNull(downloadIntent);
-            assertEquals(Intent.ACTION_VIEW, downloadIntent.getAction());
-            assertEquals(release.getApkUrl(), downloadIntent.getDataString());
-            assertTrue(downloadIntent.hasCategory(Intent.CATEGORY_BROWSABLE));
+            assertTrue(waitForMonitorHit(browserMonitor));
+            Intent browserIntent = browserMonitor.capturedIntent();
+            assertNotNull(browserIntent);
+            assertEquals(Intent.ACTION_MAIN, browserIntent.getAction());
+            assertEquals(release.getReleaseUrl(), browserIntent.getDataString());
+            assertTrue(browserIntent.hasCategory(Intent.CATEGORY_LAUNCHER));
+            Intent selector = browserIntent.getSelector();
+            assertNotNull(selector);
+            assertEquals(Intent.ACTION_MAIN, selector.getAction());
+            assertTrue(selector.hasCategory(Intent.CATEGORY_APP_BROWSER));
+            assertNull(selector.getData());
         } finally {
-            instrumentation.removeMonitor(downloadMonitor);
+            instrumentation.removeMonitor(browserMonitor);
         }
     }
 
@@ -402,8 +407,12 @@ public final class UpdateNotificationNavigationTest {
 
         @Override
         public Instrumentation.ActivityResult onStartActivity(Intent intent) {
-            if (!Intent.ACTION_VIEW.equals(intent.getAction())
-                    || !intent.hasCategory(Intent.CATEGORY_BROWSABLE)) {
+            Intent selector = intent.getSelector();
+            if (!Intent.ACTION_MAIN.equals(intent.getAction())
+                    || !intent.hasCategory(Intent.CATEGORY_LAUNCHER)
+                    || selector == null
+                    || !Intent.ACTION_MAIN.equals(selector.getAction())
+                    || !selector.hasCategory(Intent.CATEGORY_APP_BROWSER)) {
                 return null;
             }
             capturedIntent.set(new Intent(intent));
