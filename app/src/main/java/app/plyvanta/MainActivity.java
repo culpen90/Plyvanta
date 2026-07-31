@@ -3149,17 +3149,29 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void openUpdateDownload(UpdateRelease release) {
-        if (openExternalUrl(release.getApkUrl())) {
-            return;
-        }
-        if (!openExternalUrl(release.getReleaseUrl())) {
+        // Start from the HTML release page so download confirmation and retry stay
+        // inside a browser instead of competing with handlers for the raw APK URL.
+        if (!openInBrowser(release.getReleaseUrl())) {
             Toast.makeText(this, R.string.no_app_for_update, Toast.LENGTH_LONG).show();
         }
     }
 
-    private boolean openExternalUrl(String url) {
-        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-        intent.addCategory(Intent.CATEGORY_BROWSABLE);
+    private boolean openInBrowser(String url) {
+        Uri uri = Uri.parse(url);
+        Intent browserIntent = Intent.makeMainSelectorActivity(
+                Intent.ACTION_MAIN,
+                Intent.CATEGORY_APP_BROWSER
+        );
+        browserIntent.setData(uri);
+        if (startExternalActivity(browserIntent)) {
+            return true;
+        }
+        Intent webFallback = new Intent(Intent.ACTION_VIEW, uri);
+        webFallback.addCategory(Intent.CATEGORY_BROWSABLE);
+        return startExternalActivity(webFallback);
+    }
+
+    private boolean startExternalActivity(Intent intent) {
         try {
             startActivity(intent);
             return true;

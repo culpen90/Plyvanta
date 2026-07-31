@@ -26,10 +26,12 @@ existing update prompt when a compatible newer version is found. Independently,
 Plyvanta continues to check the public GitHub Releases feed about every six hours
 while a network is available. A periodic check posts one Android notification
 for each compatible newer version. Tapping the notification opens Plyvanta's
-update prompt; **Download update** then opens the exact official GitHub APK.
-Android can delay periodic background work, so notifications are update alerts
-rather than instantaneous server pushes. Android 13 and later also require the
-user to allow notifications.
+update prompt; **Open GitHub release** then opens the verified release page in
+the user's browser. The APK can be downloaded from that page, which remains
+available for a retry if the browser's download prompt is canceled. Android can
+delay periodic background work, so notifications are update alerts rather than
+instantaneous server pushes. Android 13 and later also require the user to allow
+notifications.
 
 ## What it does
 

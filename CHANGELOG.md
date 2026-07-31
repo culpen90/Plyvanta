@@ -5,6 +5,12 @@ their immutable GitHub Release notes.
 
 ## Unreleased
 
+### Fixed
+
+- Kept update downloads in a browser-first GitHub release flow so Android file
+  handlers cannot cover the browser's confirmation prompt, and canceled
+  downloads can be retried from the same release page.
+
 ### Added
 
 - Added public YouTube playlist and Mix links with ordered playback, shared
